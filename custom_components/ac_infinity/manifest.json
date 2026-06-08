@@ -1,0 +1,24 @@
+{
+  "domain": "ac_infinity",
+  "name": "AC Infinity AirTap (BLE)",
+  "version": "1.2.0",
+  "bluetooth": [
+    {
+      "connectable": true,
+      "manufacturer_id": 2306
+    }
+  ],
+  "codeowners": [
+    "@ljmerza"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "bluetooth_adapters"
+  ],
+  "documentation": "https://github.com/ljmerza/ac-infinity-airtrap-ble",
+  "issue_tracker": "https://github.com/ljmerza/ac-infinity-airtrap-ble/issues",
+  "iot_class": "local_push",
+  "requirements": [
+    "ac-infinity-ble==0.4.3"
+  ]
+}
