@@ -31,7 +31,7 @@ humidity entity is created.
 **HACS (custom repository):**
 
 1. HACS → ⋯ → *Custom repositories* → add
-   `https://github.com/ljmerza/ac-infinity-airtrap-ble` as an **Integration**.
+   `https://github.com/ljmerza/ac-infinity-airtap-ble` as an **Integration**.
 2. Install **AC Infinity AirTap (BLE)**, then restart Home Assistant.
 
 **Manual:** copy `custom_components/ac_infinity/` into your HA `config/custom_components/`.

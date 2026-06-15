@@ -1,0 +1,8 @@
+target-version = "py313"
+line-length = 100
+
+[lint]
+# Error-level rules (pyflakes + syntax) so CI catches real bugs without failing
+# on the existing fork's pre-existing style debt. To adopt import-sorting and
+# line-length too, run `ruff check --select I,E,W --fix .` and widen `select`.
+select = ["F", "E9"]
