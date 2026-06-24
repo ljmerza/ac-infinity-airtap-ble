@@ -51,7 +51,9 @@ class ACInfinityFan(
     ) -> None:
         super().__init__(coordinator)
         self._device = device
-        self._attr_name = name
+        # Primary entity: name=None inherits the device name, so entity_id is
+        # fan.<device> with no "_fan" suffix. unique_id still derives from "Fan".
+        self._attr_name = None
         self._attr_unique_id = f"{self._device.address}_{slugify(name)}"
         self._attr_device_info = DeviceInfo(
             name=device.name,
