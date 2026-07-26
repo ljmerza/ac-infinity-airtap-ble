@@ -1,6 +1,6 @@
 from bleak.exc import BleakError
 
-DOMAIN = "ac_infinity"
+DOMAIN = "ac_infinity_airtap_ble"
 
 MANUFACTURER = "AC Infinity"
 

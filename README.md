@@ -7,6 +7,25 @@ booster-fan vents (e.g. the AIRTAP T4) — no vendor cloud or phone app required
 This is a trimmed, BLE-only build focused on the AirTap: **fan control +
 temperature**, nothing else.
 
+> ### ⚠️ Breaking change in 2.0.0 — action required
+>
+> The integration domain changed from `ac_infinity` to `ac_infinity_airtap_ble`.
+> The old domain collided with
+> [dalinicus/homeassistant-acinfinity](https://github.com/dalinicus/homeassistant-acinfinity),
+> which also installs to `custom_components/ac_infinity/` — the two could not
+> coexist, and only one could be listed in HACS.
+>
+> Home Assistant cannot move a config entry between domains, so **upgrading
+> from 1.x requires you to remove and re-add the integration**:
+>
+> 1. Settings → Devices & Services → **AC Infinity AirTap (BLE)** → delete the entry.
+> 2. Update to 2.0.0 and restart Home Assistant.
+> 3. Add the integration again; your vents will be re-discovered.
+>
+> Delete the stale `config/custom_components/ac_infinity/` directory if you
+> installed manually. Re-add before renaming anything, or new entities may pick
+> up `_2` suffixes alongside the orphaned originals.
+
 ## Features
 
 - **Fan**: on / off and 10-step speed control (`fan.*`).
@@ -34,7 +53,7 @@ humidity entity is created.
    `https://github.com/ljmerza/ac-infinity-airtap-ble` as an **Integration**.
 2. Install **AC Infinity AirTap (BLE)**, then restart Home Assistant.
 
-**Manual:** copy `custom_components/ac_infinity/` into your HA `config/custom_components/`.
+**Manual:** copy `custom_components/ac_infinity_airtap_ble/` into your HA `config/custom_components/`.
 
 ## Setup
 
@@ -64,7 +83,7 @@ logger:
   default: info
   logs:
     ac_infinity_ble: debug
-    custom_components.ac_infinity: debug
+    custom_components.ac_infinity_airtap_ble: debug
 ```
 
 ## Credits
