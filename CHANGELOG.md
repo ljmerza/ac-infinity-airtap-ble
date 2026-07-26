@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.0.2
+
+- Pass `sw_version` to the device registry as a string. The upstream
+  `ac_infinity_ble.DeviceInfo.version` field is an `int`, and handing that
+  straight to `DeviceInfo` made Home Assistant log a deprecation warning on
+  every startup, once per platform. Non-string values stop being accepted in
+  Home Assistant 2026.12.0.
+
 ## 2.0.1
 
 Upgrading from 1.x no longer requires deleting and re-adding the integration.
