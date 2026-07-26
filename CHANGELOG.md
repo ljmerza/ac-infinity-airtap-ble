@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.0.1
+
+Upgrading from 1.x no longer requires deleting and re-adding the integration.
+
+2.0.0 renamed the domain but left users to migrate by hand, because Home
+Assistant cannot move a config entry between domains. Entries created by 1.x do
+survive in `.storage/core.config_entries` under the old `ac_infinity` domain,
+so the config flow now adopts them: the orphaned entry is removed and recreated
+under the current domain with the same data, title and unique ID.
+
+The old entry is removed *before* the new one is created, which releases its
+entity registry rows, so entity IDs are preserved rather than gaining `_2`
+suffixes. Adoption happens on Bluetooth discovery and on manual MAC entry, so
+vents that do not advertise reliably are covered too.
+
+Only entries carrying a BLE address are adopted, so a co-installed
+[dalinicus/homeassistant-acinfinity](https://github.com/dalinicus/homeassistant-acinfinity)
+(cloud, same old domain) is never touched.
+
 ## 2.0.0
 
 **Breaking:** the integration domain changed from `ac_infinity` to

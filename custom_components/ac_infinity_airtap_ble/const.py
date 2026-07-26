@@ -2,6 +2,12 @@ from bleak.exc import BleakError
 
 DOMAIN = "ac_infinity_airtap_ble"
 
+# Domain used up to 1.x. It collided with dalinicus/homeassistant-acinfinity,
+# so 2.0.0 moved to the name above. Entries created by 1.x are still in
+# .storage/core.config_entries under this domain and are adopted on discovery;
+# see legacy.py.
+LEGACY_DOMAIN = "ac_infinity"
+
 MANUFACTURER = "AC Infinity"
 
 DEVICE_TIMEOUT = 30

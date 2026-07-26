@@ -7,24 +7,28 @@ booster-fan vents (e.g. the AIRTAP T4) — no vendor cloud or phone app required
 This is a trimmed, BLE-only build focused on the AirTap: **fan control +
 temperature**, nothing else.
 
-> ### ⚠️ Breaking change in 2.0.0 — action required
+> ### Upgrading from 1.x — handled automatically
 >
-> The integration domain changed from `ac_infinity` to `ac_infinity_airtap_ble`.
-> The old domain collided with
+> The integration domain changed from `ac_infinity` to `ac_infinity_airtap_ble`
+> in 2.0.0. The old domain collided with
 > [dalinicus/homeassistant-acinfinity](https://github.com/dalinicus/homeassistant-acinfinity),
 > which also installs to `custom_components/ac_infinity/` — the two could not
 > coexist, and only one could be listed in HACS.
 >
-> Home Assistant cannot move a config entry between domains, so **upgrading
-> from 1.x requires you to remove and re-add the integration**:
+> Update and restart. When your vent next advertises, its old configuration is
+> adopted automatically: the stale entry is removed and recreated under the new
+> domain, keeping your entity IDs. Nothing to delete, nothing to re-add.
 >
-> 1. Settings → Devices & Services → **AC Infinity AirTap (BLE)** → delete the entry.
-> 2. Update to 2.0.0 and restart Home Assistant.
-> 3. Add the integration again; your vents will be re-discovered.
+> If a vent never advertises — the AirTap is unreliable about this, see
+> [Requirements](#requirements) — add it once via **Add Integration** and enter
+> its MAC address. That path adopts the old configuration too.
 >
-> Delete the stale `config/custom_components/ac_infinity/` directory if you
-> installed manually. Re-add before renaming anything, or new entities may pick
-> up `_2` suffixes alongside the orphaned originals.
+> Installed manually rather than through HACS? Delete the stale
+> `config/custom_components/ac_infinity/` directory, or Home Assistant will keep
+> loading 1.x alongside 2.x.
+>
+> Only *device*-based automations need attention: the device is recreated, so it
+> gets a new internal device ID. Entity-based automations are unaffected.
 
 ## Features
 

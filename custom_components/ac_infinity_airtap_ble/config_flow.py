@@ -18,6 +18,7 @@ from homeassistant.data_entry_flow import FlowResult
 
 from .const import BLEAK_EXCEPTIONS, DOMAIN
 from .device import ACInfinityDevice, DeviceInfoEx
+from .legacy import async_adopt_legacy_entry, async_find_legacy_entry
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -41,6 +42,15 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Handle the bluetooth discovery step."""
         await self.async_set_unique_id(discovery_info.address)
         self._abort_if_unique_id_configured()
+
+        # Upgrading from 1.x: adopt the orphaned ac_infinity entry for this
+        # device silently, so the domain rename costs the user nothing. No
+        # BLE round-trip here — the vent may not be reachable at startup, and
+        # the stored data is already known-good.
+        if legacy := async_find_legacy_entry(self.hass, discovery_info.address):
+            data = await async_adopt_legacy_entry(self.hass, legacy)
+            return self.async_create_entry(title=legacy.title, data=data)
+
         self._discovery_info = discovery_info
         device: DeviceInfoEx = parse_manufacturer_data(
             discovery_info.advertisement.manufacturer_data[MANUFACTURER_ID]
@@ -61,6 +71,14 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 discovery_info.address, raise_on_progress=False
             )
             self._abort_if_unique_id_configured()
+
+            # Reached when the user adds the integration by hand rather than
+            # via discovery; adopt here as well so a 1.x entry is never left
+            # orphaned alongside a duplicate new one.
+            if legacy := async_find_legacy_entry(self.hass, address):
+                data = await async_adopt_legacy_entry(self.hass, legacy)
+                return self.async_create_entry(title=legacy.title, data=data)
+
             controller = ACInfinityDevice(
                 discovery_info.device, advertisement_data=discovery_info.advertisement
             )
@@ -134,6 +152,13 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             address = user_input[CONF_ADDRESS].strip().upper()
             await self.async_set_unique_id(address, raise_on_progress=False)
             self._abort_if_unique_id_configured()
+
+            # The AirTap does not reliably advertise its manufacturer data, so
+            # users upgrading from 1.x may never hit the discovery path. Adopt
+            # here too rather than making them delete and re-add.
+            if legacy := async_find_legacy_entry(self.hass, address):
+                data = await async_adopt_legacy_entry(self.hass, legacy)
+                return self.async_create_entry(title=legacy.title, data=data)
 
             ble_device = async_ble_device_from_address(self.hass, address, True)
             if ble_device is None:
