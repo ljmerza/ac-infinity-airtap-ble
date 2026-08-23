@@ -19,29 +19,6 @@ booster-fan vents (e.g. the AIRTAP T4) — no vendor cloud or phone app required
 This is a trimmed, BLE-only build focused on the AirTap: **fan control +
 temperature**, nothing else.
 
-> ### Upgrading from 1.x — handled automatically
->
-> The integration domain changed from `ac_infinity` to `ac_infinity_airtap_ble`
-> in 2.0.0. The old domain collided with
-> [dalinicus/homeassistant-acinfinity](https://github.com/dalinicus/homeassistant-acinfinity),
-> which also installs to `custom_components/ac_infinity/` — the two could not
-> coexist, and only one could be listed in HACS.
->
-> Update and restart. When your vent next advertises, its old configuration is
-> adopted automatically: the stale entry is removed and recreated under the new
-> domain, keeping your entity IDs. Nothing to delete, nothing to re-add.
->
-> If a vent never advertises — the AirTap is unreliable about this, see
-> [Requirements](#requirements) — add it once via **Add Integration** and enter
-> its MAC address. That path adopts the old configuration too.
->
-> Installed manually rather than through HACS? Delete the stale
-> `config/custom_components/ac_infinity/` directory, or Home Assistant will keep
-> loading 1.x alongside 2.x.
->
-> Only *device*-based automations need attention: the device is recreated, so it
-> gets a new internal device ID. Entity-based automations are unaffected.
-
 ## Features
 
 - **Fan**: on / off and 10-step speed control (`fan.*`).
