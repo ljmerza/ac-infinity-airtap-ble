@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.1.0
+
+- Stop polling the vent. It was connecting about 70 times an hour, and a vent can
+  stop advertising for good after a failed connection, until it is power cycled.
+  Temperature now comes from the advertisement, and the integration only connects
+  to send a command.
+- The advertised temperature can trail the value read over a connection (up to
+  about 1.5 degrees C seen). Changes made on the vent itself or in the app no
+  longer show up in Home Assistant.
+- Fix a running vent flipping to off. The advertisement's fan byte is always 0 and
+  was overwriting the commanded speed.
+- Restore the fan's on/off state and speed after a Home Assistant restart.
+
 ## 2.0.2
 
 - Pass `sw_version` to the device registry as a string. The upstream

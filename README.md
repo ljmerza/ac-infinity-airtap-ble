@@ -62,10 +62,13 @@ Settings → **Devices & Services** → **Add Integration** → *AC Infinity Air
 
 Control uses the AC Infinity GATT protocol (service `70D51000-…`, write `…1001`,
 notify `…1002`). Commands are `cmd 3` writes: key `0x10` = power (`01` off /
-`02` on), key `0x12` = fan speed (`0`–`10`). Temperature is read from the
-device's periodic `0x1EFF` status frame. State is refreshed on a short polling
-timer because the vent's advertisements are static and get deduplicated by HA's
-Bluetooth manager.
+`02` on), key `0x12` = fan speed (`0`–`10`).
+
+The integration only connects to send a command. It does not poll, because the
+vent can stop advertising until it is power cycled after a failed connection.
+Temperature comes from the advertisement's manufacturer data, so it can trail the
+real value slightly. On/off and speed are the last values Home Assistant sent, so
+changes made on the vent itself or in the app don't show up.
 
 ## Troubleshooting
 

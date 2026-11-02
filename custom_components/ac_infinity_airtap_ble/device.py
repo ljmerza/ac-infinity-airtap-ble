@@ -35,7 +35,6 @@ BRIGHTNESS_BYTE_TO_LEVEL = {v: k for k, v in BRIGHTNESS_LEVEL_TO_BYTE.items()}
 DEFAULT_BRIGHTNESS_BYTE = 0xA3  # level 5
 
 _LOGGER = logging.getLogger(ACInfinityController.__module__)
-_MIN_SECONDS_BETWEEN_POLLS = 30
 
 
 @dataclass
@@ -54,8 +53,6 @@ class DeviceInfoEx(DeviceInfo):
 
 
 class ACInfinityDevice(ACInfinityController):
-    _config_changed_since_last_update = False
-
     def __init__(
         self,
         ble_device: BLEDevice,
@@ -79,8 +76,11 @@ class ACInfinityDevice(ACInfinityController):
         info = parse_manufacturer_data(
             advertisement_data.manufacturer_data[MANUFACTURER_ID]
         )
+        # The advertisement's fan byte is always 0 on this device, and is_on needs
+        # a non-zero fan, so taking it would flip a running vent to off.
         self._state = dataclasses.replace(
-            self._state, **{k: v for k, v in dataclasses.asdict(info).items() if v is not None}
+            self._state,
+            **{k: v for k, v in dataclasses.asdict(info).items() if v is not None and k != "fan"},
         )
         self._fire_callbacks(CallbackType.ADVERTISEMENT)
 
@@ -239,12 +239,15 @@ class ACInfinityDevice(ACInfinityController):
     def state(self) -> DeviceInfoEx:
         return self._state
 
-    def update_needed(self, seconds_since_last_update: Optional[float | int]) -> bool:
-        return (self._config_changed_since_last_update or
-                seconds_since_last_update is None or seconds_since_last_update > _MIN_SECONDS_BETWEEN_POLLS)
+    def restore_fan_state(self, is_on: bool, speed: Optional[int]) -> None:
+        """Seed the commanded state after a restart, since nothing polls the vent for it."""
+        self._state.work_type = WORK_TYPE_ON if is_on else WORK_TYPE_OFF
+        if speed:
+            self._state.level_on = speed
+        self._state.fan = (speed or self._state.level_on or 10) if is_on else 0
 
     async def update(self) -> None:
-        """Poll the device to update state date, including data not present in BLE advertisements."""
+        """Read the device once over GATT. Only the config flow uses this."""
         await self._ensure_connected()
         try:
             _LOGGER.debug("%s: Updating model data", self.name)
@@ -254,7 +257,6 @@ class ACInfinityDevice(ACInfinityController):
                     self.state.work_type = data[12]
                     self.state.level_off = data[15]
                     self.state.level_on = data[18]
-                    self._config_changed_since_last_update = False
                     self._fire_callbacks(CallbackType.UPDATE_RESPONSE)
                 elif self._parse_status_frame(data):
                     self._fire_callbacks(CallbackType.UPDATE_RESPONSE)
@@ -267,8 +269,7 @@ class ACInfinityDevice(ACInfinityController):
                     )
             # The settings read above does not carry temperature; the device
             # emits that in a periodic 0x1EFF status push. Stay connected a few
-            # seconds so _notification_handler can catch one. Polls are >=30s
-            # apart, so this is cheap.
+            # seconds so _notification_handler can catch one.
             await asyncio.sleep(4)
         finally:
             await self._execute_disconnect()

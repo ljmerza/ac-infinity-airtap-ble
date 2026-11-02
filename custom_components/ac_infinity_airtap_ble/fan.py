@@ -5,10 +5,12 @@ from typing import Any
 
 from homeassistant.components.fan import FanEntity, FanEntityFeature
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import STATE_OFF, STATE_ON
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import slugify
 from homeassistant.util.percentage import (int_states_in_range,
                                            percentage_to_ranged_value,
@@ -33,7 +35,7 @@ async def async_setup_entry(
 
 
 class ACInfinityFan(
-    ActiveBluetoothCoordinatorEntity[ACInfinityDataUpdateCoordinator], FanEntity
+    ActiveBluetoothCoordinatorEntity[ACInfinityDataUpdateCoordinator], FanEntity, RestoreEntity
 ):
     _attr_has_entity_name = True
     _attr_speed_count = int_states_in_range(SPEED_RANGE)
@@ -62,6 +64,17 @@ class ACInfinityFan(
             sw_version=str(device.state.version),
             connections={(dr.CONNECTION_BLUETOOTH, device.address)},
         )
+
+    async def async_added_to_hass(self) -> None:
+        """Restore the commanded state; nothing reads it back from the vent."""
+        await super().async_added_to_hass()
+        last = await self.async_get_last_state()
+        if last is None or last.state not in (STATE_ON, STATE_OFF):
+            return
+        percentage = last.attributes.get("percentage")
+        speed = math.ceil(percentage_to_ranged_value(SPEED_RANGE, percentage)) if percentage else None
+        self._device.restore_fan_state(last.state == STATE_ON, speed)
+        self._update_attrs()
 
     async def async_set_percentage(self, percentage: int) -> None:
         """Set the speed of the fan, as a percentage."""
