@@ -21,12 +21,29 @@ temperature**, nothing else.
 
 ## Features
 
-- **Fan**: on / off and 10-step speed control (`fan.*`).
-- **Temperature** sensor (`sensor.*`).
+- **Fan**: on / off, 10-step speed control and an **Auto** preset (`fan.*`).
+- **Temperature** and **Current Speed** sensors (`sensor.*`).
+- **Auto mode**: high and low temperature triggers, each with an enable switch, plus
+  the Auto Transition step. The vent runs these itself, so Auto keeps working when
+  Home Assistant or Bluetooth is down.
+- **Off Speed**, **Temperature Calibration** and **Temperature Unit** settings.
+- **Display** switch and **Display Brightness** select.
+- **Refresh Settings** button.
 
-That's intentionally it — the auto-mode/threshold configuration entities of the
-upstream project have been removed. The AirTap T4 has no humidity sensor, so no
-humidity entity is created.
+The AirTap T4 reports no humidity, so no humidity entity is created.
+
+### How Auto mode runs
+
+| Auto trigger state | Speed the vent reported |
+|---|---|
+| Triggered | On speed (the fan's speed setting) |
+| Not triggered | Off Speed |
+
+Changing a trigger keeps the vent's current mode. Choosing the Auto preset is what
+starts Auto. Pick a speed or turn the fan off to leave it.
+
+Plain off mode reported speed 0 with an Off Speed of 10, so Off Speed only seems to
+apply in Auto. A vent with a high Off Speed can run fast in Auto when it isn't triggered.
 
 ## Requirements
 
@@ -61,14 +78,17 @@ Settings → **Devices & Services** → **Add Integration** → *AC Infinity Air
 ## How it talks to the vent
 
 Control uses the AC Infinity GATT protocol (service `70D51000-…`, write `…1001`,
-notify `…1002`). Commands are `cmd 3` writes: key `0x10` = power (`01` off /
-`02` on), key `0x12` = fan speed (`0`–`10`).
+notify `…1002`). Commands are `cmd 3` writes: key `0x10` = mode (`01` off / `02` on /
+`03` auto), key `0x12` = fan speed (`0`–`10`), key `0x11` = off speed, key `0x13` = Auto
+triggers, key `0x20` = unit, key `0x22` = Auto transition, key `0x24` = calibration.
 
-The integration only connects to send a command. It does not poll, because the
-vent can stop advertising until it is power cycled after a failed connection.
-Temperature comes from the advertisement's manufacturer data, so it can trail the
-real value slightly. On/off and speed are the last values Home Assistant sent, so
-changes made on the vent itself or in the app don't show up.
+The integration only connects to carry a command or a Refresh Settings press. It does
+not poll, because the vent can stop advertising until it is power cycled after a failed
+connection. While connected for a command, it also reads the vent's mode, speed and
+settings (`cmd 1`), so those stay correct without extra connections. A setting changed
+on the vent itself or in the app shows up after the next command or refresh. Between
+those, temperature comes from the advertisement's manufacturer data, so it can trail
+the real value slightly.
 
 ## Troubleshooting
 

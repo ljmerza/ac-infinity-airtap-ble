@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import slugify
 
 from .const import DEVICE_MODEL, DOMAIN, MANUFACTURER
@@ -24,12 +26,15 @@ async def async_setup_entry(
 ) -> None:
     data: ACInfinityData = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
-        [ACInfinityDisplayBrightness(data.coordinator, data.device, "Display Brightness")]
+        [
+            ACInfinityDisplayBrightness(data.coordinator, data.device, "Display Brightness"),
+            ACInfinityTemperatureUnit(data.coordinator, data.device, "Temperature Unit"),
+        ]
     )
 
 
 class ACInfinityDisplayBrightness(
-    ActiveBluetoothCoordinatorEntity[ACInfinityDataUpdateCoordinator], SelectEntity
+    ActiveBluetoothCoordinatorEntity[ACInfinityDataUpdateCoordinator], SelectEntity, RestoreEntity
 ):
     """Display brightness, 5 discrete levels (cmd-3 setting key 0x21 byte[0])."""
 
@@ -56,6 +61,19 @@ class ACInfinityDisplayBrightness(
         )
         self._update_attrs()
 
+    async def async_added_to_hass(self) -> None:
+        """Restore the last known value; nothing reads it until a command connects."""
+        await super().async_added_to_hass()
+        last = await self.async_get_last_state()
+        if last is not None and last.state in self.options:
+            self._restore(last.state)
+            self._update_attrs()
+
+    @callback
+    def _restore(self, option: str) -> None:
+        if self._device.state.display_brightness is None:
+            self._device.state.display_brightness = BRIGHTNESS_LEVEL_TO_BYTE[int(option)]
+
     async def async_select_option(self, option: str) -> None:
         await self._device.set_display_brightness_level(int(option))
         self._write_state_from_device()
@@ -78,3 +96,29 @@ class ACInfinityDisplayBrightness(
         """Handle updated data from the coordinator."""
         self._update_attrs()
         super()._handle_coordinator_update()
+
+
+class ACInfinityTemperatureUnit(ACInfinityDisplayBrightness):
+    """The unit the vent displays (cmd-3 setting key 0x20)."""
+
+    _attr_icon = "mdi:temperature-fahrenheit"
+    _attr_options = [UnitOfTemperature.FAHRENHEIT, UnitOfTemperature.CELSIUS]
+
+    @callback
+    def _restore(self, option: str) -> None:
+        if self._device.state.unit_celsius is None:
+            self._device.state.unit_celsius = option == UnitOfTemperature.CELSIUS
+
+    async def async_select_option(self, option: str) -> None:
+        await self._device.set_temperature_unit(option == UnitOfTemperature.CELSIUS)
+        self._write_state_from_device()
+
+    @callback
+    def _update_attrs(self) -> None:
+        unit = self._device.state.unit_celsius
+        if unit is None:
+            self._attr_current_option = None
+        else:
+            self._attr_current_option = (
+                UnitOfTemperature.CELSIUS if unit else UnitOfTemperature.FAHRENHEIT
+            )

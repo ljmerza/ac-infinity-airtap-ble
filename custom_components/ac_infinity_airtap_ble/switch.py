@@ -4,10 +4,12 @@ from typing import Any
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import STATE_OFF, STATE_ON
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import slugify
 
 from .const import DEVICE_MODEL, DOMAIN, MANUFACTURER
@@ -23,11 +25,17 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     data: ACInfinityData = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([ACInfinityDisplaySwitch(data.coordinator, data.device, "Display")])
+    async_add_entities(
+        [
+            ACInfinityDisplaySwitch(data.coordinator, data.device, "Display"),
+            ACInfinityAutoHighSwitch(data.coordinator, data.device, "Auto High Trigger"),
+            ACInfinityAutoLowSwitch(data.coordinator, data.device, "Auto Low Trigger"),
+        ]
+    )
 
 
 class ACInfinityDisplaySwitch(
-    ActiveBluetoothCoordinatorEntity[ACInfinityDataUpdateCoordinator], SwitchEntity
+    ActiveBluetoothCoordinatorEntity[ACInfinityDataUpdateCoordinator], SwitchEntity, RestoreEntity
 ):
     """Toggle the AirTap's on-unit display (cmd-3 setting key 0x21)."""
 
@@ -52,6 +60,19 @@ class ACInfinityDisplaySwitch(
             connections={(dr.CONNECTION_BLUETOOTH, device.address)},
         )
         self._update_attrs()
+
+    async def async_added_to_hass(self) -> None:
+        """Restore the last known value; nothing reads it until a command connects."""
+        await super().async_added_to_hass()
+        last = await self.async_get_last_state()
+        if last is not None and last.state in (STATE_ON, STATE_OFF):
+            self._restore(last.state == STATE_ON)
+            self._update_attrs()
+
+    @callback
+    def _restore(self, is_on: bool) -> None:
+        if self._device.state.display_on is None:
+            self._device.state.display_on = is_on
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         await self._device.set_display(True)
@@ -82,3 +103,49 @@ class ACInfinityDisplaySwitch(
         """Handle updated data from the coordinator."""
         self._update_attrs()
         super()._handle_coordinator_update()
+
+
+class ACInfinityAutoHighSwitch(ACInfinityDisplaySwitch):
+    """Enable the Auto high temperature trigger (key 0x13 byte[0] bit 0x08)."""
+
+    _attr_icon = "mdi:thermometer-chevron-up"
+
+    @callback
+    def _restore(self, is_on: bool) -> None:
+        if self._device.state.auto_high_on is None:
+            self._device.state.auto_high_on = is_on
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._device.set_auto_high_enabled(True)
+        self._write_state_from_device()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._device.set_auto_high_enabled(False)
+        self._write_state_from_device()
+
+    @callback
+    def _update_attrs(self) -> None:
+        self._attr_is_on = self._device.state.auto_high_on
+
+
+class ACInfinityAutoLowSwitch(ACInfinityDisplaySwitch):
+    """Enable the Auto low temperature trigger (key 0x13 byte[0] bit 0x04)."""
+
+    _attr_icon = "mdi:thermometer-chevron-down"
+
+    @callback
+    def _restore(self, is_on: bool) -> None:
+        if self._device.state.auto_low_on is None:
+            self._device.state.auto_low_on = is_on
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._device.set_auto_low_enabled(True)
+        self._write_state_from_device()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._device.set_auto_low_enabled(False)
+        self._write_state_from_device()
+
+    @callback
+    def _update_attrs(self) -> None:
+        self._attr_is_on = self._device.state.auto_low_on

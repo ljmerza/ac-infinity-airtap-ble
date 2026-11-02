@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.2.0
+
+- Add Auto mode: an Auto preset on the fan, high and low temperature triggers with
+  enable switches, and an Auto Transition setting. The vent runs Auto itself.
+- Add Off Speed, Temperature Calibration and Temperature Unit settings.
+- Add a Current Speed sensor and a Refresh Settings button.
+- Read the vent's mode, speed and settings while already connected for a command, so
+  the display controls and new settings show real values instead of unknown. Settings
+  changed on the vent or in the app appear after the next command or refresh.
+- Use the advertised speed for the fan. A proxy can replay an old copy of the
+  advertisement for minutes, so repeats and a proxy's first copy aren't trusted, which
+  also keeps old temperatures out.
+- Restore display and settings values after a Home Assistant restart.
+
 ## 2.1.0
 
 - Stop polling the vent. It was connecting about 70 times an hour, and a vent can
@@ -9,8 +23,10 @@
 - The advertised temperature can trail the value read over a connection (up to
   about 1.5 degrees C seen). Changes made on the vent itself or in the app no
   longer show up in Home Assistant.
-- Fix a running vent flipping to off. The advertisement's fan byte is always 0 and
-  was overwriting the commanded speed.
+- Fix a running vent flipping to off. An advertisement with a fan byte of 0 was
+  overwriting the commanded speed, so this release ignores that byte. This entry
+  first said the byte is always 0, which was wrong: it appears to report the real
+  speed while the vent runs.
 - Restore the fan's on/off state and speed after a Home Assistant restart.
 - The display switch and brightness show as unknown until you set them, because
   nothing reads them from the vent anymore.

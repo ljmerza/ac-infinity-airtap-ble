@@ -24,7 +24,10 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     data: ACInfinityData = hass.data[DOMAIN][entry.entry_id]
-    entities = [TemperatureSensor(data.coordinator, data.device, "Temperature")]
+    entities = [
+        TemperatureSensor(data.coordinator, data.device, "Temperature"),
+        CurrentSpeedSensor(data.coordinator, data.device, "Current Speed"),
+    ]
 
     if data.device.state.type not in [6]:  # Airtap does not have humidity
         entities.append(HumiditySensor(data.coordinator, data.device, "Humidity"))
@@ -78,6 +81,19 @@ class TemperatureSensor(ACInfinitySensor):
     def _update_attrs(self) -> None:
         """Handle updating _attr values."""
         self._attr_native_value = self._device.temperature
+
+
+class CurrentSpeedSensor(ACInfinitySensor):
+    """The speed the vent reports, including in Auto and off mode."""
+
+    _attr_name = "Current Speed"
+    _attr_icon = "mdi:fan"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    @callback
+    def _update_attrs(self) -> None:
+        """Handle updating _attr values."""
+        self._attr_native_value = self._device.state.current_speed
 
 
 class HumiditySensor(ACInfinitySensor):

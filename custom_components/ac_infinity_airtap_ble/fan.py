@@ -23,6 +23,7 @@ from .device import ACInfinityDevice
 from .models import ACInfinityData
 
 SPEED_RANGE = (1, 10)
+PRESET_AUTO = "Auto"
 
 
 async def async_setup_entry(
@@ -41,9 +42,11 @@ class ACInfinityFan(
     _attr_speed_count = int_states_in_range(SPEED_RANGE)
     _attr_supported_features = (
         FanEntityFeature.SET_SPEED
+        | FanEntityFeature.PRESET_MODE
         | FanEntityFeature.TURN_OFF
         | FanEntityFeature.TURN_ON
     )
+    _attr_preset_modes = [PRESET_AUTO]
 
     def __init__(
         self,
@@ -73,7 +76,8 @@ class ACInfinityFan(
             return
         percentage = last.attributes.get("percentage")
         speed = math.ceil(percentage_to_ranged_value(SPEED_RANGE, percentage)) if percentage else None
-        self._device.restore_fan_state(last.state == STATE_ON, speed)
+        auto = last.attributes.get("preset_mode") == PRESET_AUTO
+        self._device.restore_fan_state(last.state == STATE_ON, speed, auto)
         self._update_attrs()
 
     async def async_set_percentage(self, percentage: int) -> None:
@@ -101,6 +105,11 @@ class ACInfinityFan(
         await self._device.turn_off()
         self._write_state_from_device()
 
+    async def async_set_preset_mode(self, preset_mode: str) -> None:
+        """Hand control to the vent's own Auto mode."""
+        await self._device.set_auto_mode()
+        self._write_state_from_device()
+
     @callback
     def _write_state_from_device(self) -> None:
         """Reflect commanded device state in HA immediately.
@@ -116,6 +125,7 @@ class ACInfinityFan(
     def _update_attrs(self) -> None:
         """Handle updating _attr values."""
         self._attr_is_on = self._device.is_on
+        self._attr_preset_mode = PRESET_AUTO if self._device.is_auto else None
         self._attr_percentage = ranged_value_to_percentage(
             SPEED_RANGE, self._device.state.fan or 0
         )

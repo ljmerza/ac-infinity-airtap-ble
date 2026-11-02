@@ -14,7 +14,14 @@ from .coordinator import ACInfinityDataUpdateCoordinator
 from .device import ACInfinityDevice, DeviceInfoEx
 from .models import ACInfinityData
 
-PLATFORMS: list[Platform] = [Platform.FAN, Platform.SENSOR, Platform.SWITCH, Platform.SELECT]
+PLATFORMS: list[Platform] = [
+    Platform.BUTTON,
+    Platform.FAN,
+    Platform.NUMBER,
+    Platform.SELECT,
+    Platform.SENSOR,
+    Platform.SWITCH,
+]
 
 _LOGGER = logging.getLogger(__name__)
 
