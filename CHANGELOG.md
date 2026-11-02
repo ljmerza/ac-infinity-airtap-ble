@@ -12,6 +12,12 @@
 - Fix a running vent flipping to off. The advertisement's fan byte is always 0 and
   was overwriting the commanded speed.
 - Restore the fan's on/off state and speed after a Home Assistant restart.
+- The display switch and brightness show as unknown until you set them, because
+  nothing reads them from the vent anymore.
+- Fix commands being dropped with a "device unreachable?" error when a second one
+  arrived while the first was still connecting. Commands now take turns on one
+  connection, and while waiting, a newer command replaces an older one of the same
+  kind.
 
 ## 2.0.2
 

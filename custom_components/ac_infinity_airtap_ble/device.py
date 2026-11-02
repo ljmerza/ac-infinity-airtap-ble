@@ -68,6 +68,10 @@ class ACInfinityDevice(ACInfinityController):
         if self._state is DeviceInfo:
             self._state = DeviceInfoEx(**self._state.__dict__)
 
+        self._command_lock = asyncio.Lock()
+        self._commands_in_line = 0
+        self._newest_command: dict[int, object] = {}
+
     def set_ble_device_and_advertisement_data(
         self, ble_device: BLEDevice, advertisement_data: AdvertisementData
     ) -> None:
@@ -125,17 +129,48 @@ class ACInfinityDevice(ACInfinityController):
             return True
         return False
 
-    async def _send_setting(self, payload: list[int]) -> None:
+    async def _send_setting(self, payload: list[int]) -> bool:
         """Send one cmd-3 setting write (TLV key,len,value...). Matches the app.
 
         See findings/CAPTURE_2026-06-07.md: cmd 3 = WRITE, key 0x10 = power/mode
         (01=off, 02=on, 03=auto), key 0x12 = fan speed (0-10).
+
+        Commands take turns. Connecting can take a while, and without this the first
+        command's disconnect cuts off anything waiting on the same connection. While
+        waiting, a command is replaced by a newer one of the same kind (its first key),
+        so a slider drag doesn't send every step. The connection stays open for the next
+        command in line, since every extra connection is another chance to lose the vent.
+
+        Returns False if the command was replaced and never sent.
         """
+        kind = payload[0]
+        ticket = object()
+        self._newest_command[kind] = ticket
+        self._commands_in_line += 1
+        try:
+            async with self._command_lock:
+                if self._newest_command[kind] is not ticket:
+                    _LOGGER.debug("%s: Skipping replaced command %s", self.name, payload)
+                    return False
+                await self._send_setting_now(payload)
+                return True
+        finally:
+            self._commands_in_line -= 1
+            if not self._commands_in_line:
+                await self._execute_disconnect()
+                # Otherwise the idle timer can fire during the next command's connect.
+                if self._disconnect_timer:
+                    self._disconnect_timer.cancel()
+                    self._disconnect_timer = None
+
+    async def _send_setting_now(self, payload: list[int]) -> None:
+        """Write one setting. Call with the command lock held."""
         try:
             await self._ensure_connected()
             command = self._protocol._add_head(payload, 3, self.sequence)
             await self._send_command(command)
         except (*BLEAK_EXCEPTIONS, AssertionError) as err:
+            await self._execute_disconnect()
             # The device connects per-command; if it's out of range or busy the
             # upstream lib raises a raw TimeoutError/AssertionError. Translate to a
             # HomeAssistantError so HA shows a clean failure instead of logging an
@@ -143,8 +178,6 @@ class ACInfinityDevice(ACInfinityController):
             raise HomeAssistantError(
                 f"{self.name}: failed to send BLE command (device unreachable?): {err!r}"
             ) from err
-        finally:
-            await self._execute_disconnect()
 
     async def set_speed(self, speed: int) -> None:
         """Set fan speed 0-10 (key 0x12). Speed 0 = off."""
@@ -154,7 +187,8 @@ class ACInfinityDevice(ACInfinityController):
             await self.turn_off()
             return
         _LOGGER.debug("%s: Set speed to %s", self.name, speed)
-        await self._send_setting([0x10, 1, 2, 0x12, 1, speed])  # on + speed
+        if not await self._send_setting([0x10, 1, 2, 0x12, 1, speed]):  # on + speed
+            return
         self._state.work_type = 2
         self._state.level_on = speed
         self._state.fan = speed
@@ -165,7 +199,8 @@ class ACInfinityDevice(ACInfinityController):
             await self.set_speed(speed)
             return
         _LOGGER.debug("%s: Turn on", self.name)
-        await self._send_setting([0x10, 1, 2])
+        if not await self._send_setting([0x10, 1, 2]):
+            return
         self._state.work_type = 2
         if not self._state.fan:
             self._state.fan = self._state.level_on or 10
@@ -173,7 +208,8 @@ class ACInfinityDevice(ACInfinityController):
     async def turn_off(self) -> None:
         """Turn off (key 0x10 = 1) -- exactly what the app sends."""
         _LOGGER.debug("%s: Turn off", self.name)
-        await self._send_setting([0x10, 1, 1])
+        if not await self._send_setting([0x10, 1, 1]):
+            return
         self._state.work_type = 1
         self._state.fan = 0
 
