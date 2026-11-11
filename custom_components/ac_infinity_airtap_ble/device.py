@@ -574,9 +574,50 @@ class ACInfinityDevice(ACInfinityController):
             self._state.level_on = speed
         self._state.fan = (speed or self._state.level_on or 10) if is_on else 0
 
+    def _resolve_characteristics(self, services) -> bool:
+        """Find the control characteristics, and log the vent's GATT table.
+
+        Newer vents (device type 48, e.g. the AC-RBF4-B) fail setup, and their layout
+        isn't known yet (issue #1). When the known characteristics are missing this
+        logs a warning, so the table shows up without debug logging.
+        """
+        resolved = super()._resolve_characteristics(services)
+        table = "; ".join(
+            f"{service.uuid}: "
+            + ", ".join(
+                f"{char.uuid} (handle {char.handle}, {'/'.join(char.properties)})"
+                for char in service.characteristics
+            )
+            for service in services
+        )
+        (_LOGGER.debug if resolved else _LOGGER.warning)(
+            "%s [%s] (type %s, version %s): GATT services: %s",
+            self.name,
+            self.address,
+            self._state.type,
+            self._state.version,
+            table,
+        )
+        return resolved
+
+    def _log_setup_failure(self, stage: str, err: Exception) -> None:
+        _LOGGER.warning(
+            "%s [%s] (type %s, version %s): setup failed at %s: %r",
+            self.name,
+            self.address,
+            self._state.type,
+            self._state.version,
+            stage,
+            err,
+        )
+
     async def update(self) -> None:
         """Read the device once over GATT. Only the config flow uses this."""
-        await self._ensure_connected()
+        try:
+            await self._ensure_connected()
+        except Exception as err:
+            self._log_setup_failure("connect", err)
+            raise
         try:
             _LOGGER.debug("%s: Updating model data", self.name)
             command = self._protocol.get_model_data(self.state.type, 0, self.sequence)
@@ -599,5 +640,9 @@ class ACInfinityDevice(ACInfinityController):
             # emits that in a periodic 0x1EFF status push. Stay connected a few
             # seconds so _notification_handler can catch one.
             await asyncio.sleep(4)
+        except Exception as err:
+            # A TimeoutError here means the write went out but no reply came back.
+            self._log_setup_failure("model query", err)
+            raise
         finally:
             await self._execute_disconnect()
