@@ -120,6 +120,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # No AC Infinity (manufacturer 2306) devices advertising — fall back to
         # entering a BLE MAC address manually and connecting to it directly.
         if not self._discovered_devices:
+            _LOGGER.warning(
+                "No unconfigured AC Infinity advertisements (manufacturer %s) seen, "
+                "asking for a MAC address instead",
+                MANUFACTURER_ID,
+            )
             return await self.async_step_manual()
 
         _LOGGER.debug("Discovered devices: %s", self._discovered_devices)
@@ -162,6 +167,12 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
             ble_device = async_ble_device_from_address(self.hass, address, True)
             if ble_device is None:
+                _LOGGER.warning(
+                    "%s: no Bluetooth adapter or proxy that can connect sees this address "
+                    "right now (seen by a passive scanner: %s)",
+                    address,
+                    async_ble_device_from_address(self.hass, address, False) is not None,
+                )
                 errors["base"] = "cannot_connect"
             else:
                 # Minimal seed state; real state is read over GATT in update().
