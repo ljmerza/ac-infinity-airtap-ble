@@ -18,6 +18,9 @@
   "integration_type": "device",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/ljmerza/ac-infinity-airtap-ble/issues",
+  "loggers": [
+    "ac_infinity_ble"
+  ],
   "requirements": [
     "ac-infinity-ble==0.4.3"
   ],
