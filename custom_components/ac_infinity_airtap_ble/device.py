@@ -57,16 +57,27 @@ READ_BACK_KEYS = (
     [0x20, 0x21, 0x22, 0x24, 0x11, 0x12, 0x13],
 )
 
-# Type 48 is the newer Wi-Fi AirTap (AC-RBF4-B, issue #1). Its 0xFFFF service
-# (ff01/ff02) is Espressif BluFi Wi-Fi provisioning, not control: it answered our query
-# with a BluFi error report. Upstream ac-infinity-ble 1.0.0, worked out from the app and
-# not tested on this model, puts type 48 in a "home" family: a query reads only keys
-# 0x10 and 0x12 and ends with the port suffix ff 00, and power is its own key 0x16. Our
-# query read 0x10-0x17 with no suffix, which the vent ignored, or refused with GATT
-# error 14 when acknowledged. Until a vent confirms the home format, setup only sends
-# that query and logs the reply.
+# Type 48 is the newer Wi-Fi AirTap ("Airtap AI", AC-RBF4-B, issue #1). Its 0xFFFF
+# service (ff01/ff02) is Espressif BluFi Wi-Fi provisioning and 0x8018 is Espressif's BLE
+# OTA service. The AC Infinity app (2.1.2) sends it the same A5 frames on 70D51001 with
+# an acknowledged write, but the vent refuses ours with GATT error 14 whatever the
+# payload. Before writing, the app's connect for Wi-Fi models subscribes to ff02 and the
+# four OTA characteristics, so setup does the same. Subscribing only writes their CCCDs:
+# nothing is sent to BluFi or OTA. Until a vent answers, setup only sends the app's two
+# queries for this model and logs what comes back.
 TYPE_48 = 48
-TYPE_48_QUERY = [0x10, 0x12, 0xFF, 0x00]
+TYPE_48_EXTRA_SUBSCRIPTIONS = (
+    "0000ff02-0000-1000-8000-00805f9b34fb",
+    "00008020-0000-1000-8000-00805f9b34fb",
+    "00008021-0000-1000-8000-00805f9b34fb",
+    "00008022-0000-1000-8000-00805f9b34fb",
+    "00008023-0000-1000-8000-00805f9b34fb",
+)
+# RoomToRoomFanResolution: initMode (getAllModelData) and getModelData for port 0.
+TYPE_48_QUERIES = {
+    "initMode": [0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17],
+    "getModelData": [0x20, 0x10, 0x11, 0x12, 0x13, 0x15, 0x18, 0x24, 0x14, 0x31, 0xFF, 0x00],
+}
 DEVICE_INFO_UUIDS = {
     "model": "00002a24-0000-1000-8000-00805f9b34fb",
     "hardware": "00002a27-0000-1000-8000-00805f9b34fb",
@@ -652,31 +663,54 @@ class ACInfinityDevice(ACInfinityController):
             i += 2 + length
         return values
 
-    async def _probe_type_48(self) -> None:
-        """Type 48 setup only: send the home-family query and log the reply. Read-only.
-
-        Tries the library's write without a response first, then an acknowledged write.
-        """
-        for response in (False, True):
-            command = self._protocol._add_head(TYPE_48_QUERY, 1, self.sequence)
-            how = "acknowledged" if response else "without response"
+    async def _type_48_app_connect(self) -> None:
+        """Type 48 setup only: the extra subscriptions the app makes for Wi-Fi models."""
+        client = self._client
+        subscribed, failed = [], {}
+        for uuid in TYPE_48_EXTRA_SUBSCRIPTIONS:
+            if (char := client.services.get_characteristic(uuid)) is None:
+                failed[uuid[4:8]] = "missing"
+                continue
             try:
+                await client.start_notify(char, self._notification_handler)
+                subscribed.append(uuid[4:8])
+            except BLEAK_EXCEPTIONS as err:
+                failed[uuid[4:8]] = repr(err)
+        _LOGGER.warning(
+            "%s: MTU %s, extra subscriptions %s, failed %s",
+            self.name,
+            getattr(client, "mtu_size", None),
+            subscribed,
+            failed,
+        )
+
+    async def _probe_type_48(self) -> None:
+        """Type 48 setup only: send the app's queries for this model and log replies.
+
+        Read-only. Acknowledged writes, as the app uses. A reconnect in between loses the
+        extra subscriptions, so they're made again.
+        """
+        for name, keys in TYPE_48_QUERIES.items():
+            command = self._protocol._add_head(keys, 1, self.sequence)
+            try:
+                client = self._client
                 await self._ensure_connected()
-                reply = await self._write_and_wait(self._write_char, command, response)
+                if self._client is not client:
+                    await self._type_48_app_connect()
+                reply = await self._write_and_wait(self._write_char, command, True)
             except (*BLEAK_EXCEPTIONS, AssertionError) as err:
                 _LOGGER.warning(
-                    "%s: type 48 query %s (%s) failed: %r", self.name, how, command.hex(), err
+                    "%s: type 48 %s query (%s) failed: %r", self.name, name, command.hex(), err
                 )
                 continue
             _LOGGER.warning(
-                "%s: type 48 query %s (%s) answered: %s, values %s",
+                "%s: type 48 %s query (%s) answered: %s, values %s",
                 self.name,
-                how,
+                name,
                 command.hex(),
                 bytes(reply).hex(),
                 self._decode_tlv(reply),
             )
-            return
 
     async def _log_device_info(self) -> None:
         """Type 48 setup only: log the model and revision strings the vent reports."""
@@ -713,6 +747,7 @@ class ACInfinityDevice(ACInfinityController):
             raise
         try:
             if self._is_type_48:
+                await self._type_48_app_connect()
                 await self._log_device_info()
                 await self._probe_type_48()
                 raise UnsupportedDevice(f"{self.name}: type 48 vents aren't supported yet")
