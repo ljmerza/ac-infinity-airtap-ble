@@ -10,7 +10,6 @@ from typing import Optional
 
 from ac_infinity_ble import ACInfinityController, DeviceInfo
 from ac_infinity_ble.const import CallbackType, MANUFACTURER_ID
-from ac_infinity_ble.exceptions import CharacteristicMissingError
 from ac_infinity_ble.protocol import parse_manufacturer_data
 from ac_infinity_ble.util import get_short
 from bleak.backends.device import BLEDevice
@@ -58,16 +57,16 @@ READ_BACK_KEYS = (
     [0x20, 0x21, 0x22, 0x24, 0x11, 0x12, 0x13],
 )
 
-# Type 48 is the newer Wi-Fi AirTap (AC-RBF4-B, issue #1). It has the 70D51000 pair
-# the library picks, but ignored a query sent there, and refused an acknowledged write
-# to it with GATT error 14. It also has an ff01/ff02 pair on the 0xFFFF service it
-# advertises, so commands go there instead. Both of its write characteristics only take
-# acknowledged writes, while the library always writes without a response.
+# Type 48 is the newer Wi-Fi AirTap (AC-RBF4-B, issue #1). Its 0xFFFF service
+# (ff01/ff02) is Espressif BluFi Wi-Fi provisioning, not control: it answered our query
+# with a BluFi error report. Upstream ac-infinity-ble 1.0.0, worked out from the app and
+# not tested on this model, puts type 48 in a "home" family: a query reads only keys
+# 0x10 and 0x12 and ends with the port suffix ff 00, and power is its own key 0x16. Our
+# query read 0x10-0x17 with no suffix, which the vent ignored, or refused with GATT
+# error 14 when acknowledged. Until a vent confirms the home format, setup only sends
+# that query and logs the reply.
 TYPE_48 = 48
-FFFF_WRITE_UUID = "0000ff01-0000-1000-8000-00805f9b34fb"
-FFFF_NOTIFY_UUID = "0000ff02-0000-1000-8000-00805f9b34fb"
-D5_WRITE_UUID = "70d51001-2c7f-4e75-ae8a-d758951ce4e0"
-D5_NOTIFY_UUID = "70d51002-2c7f-4e75-ae8a-d758951ce4e0"
+TYPE_48_QUERY = [0x10, 0x12, 0xFF, 0x00]
 DEVICE_INFO_UUIDS = {
     "model": "00002a24-0000-1000-8000-00805f9b34fb",
     "hardware": "00002a27-0000-1000-8000-00805f9b34fb",
@@ -76,6 +75,10 @@ DEVICE_INFO_UUIDS = {
 COMMAND_TIMEOUT = 5
 
 _LOGGER = logging.getLogger(ACInfinityController.__module__)
+
+
+class UnsupportedDevice(Exception):
+    """Raised by setup for a vent this integration can't control yet."""
 
 
 @dataclass
@@ -150,9 +153,7 @@ class ACInfinityDevice(ACInfinityController):
         self._command_lock = asyncio.Lock()
         self._commands_in_line = 0
         self._newest_command: dict[int, object] = {}
-        # Type 48: the client the second notify characteristic was subscribed on, and
-        # every notification seen during setup as (handle, hex).
-        self._extra_notify_client = None
+        # Type 48: every notification seen during setup as (handle, hex).
         self._setup_notifications: list[tuple[object, str]] | None = None
 
     @property
@@ -611,12 +612,6 @@ class ACInfinityDevice(ACInfinityController):
         logs a warning, so the table shows up without debug logging.
         """
         resolved = super()._resolve_characteristics(services)
-        if self._is_type_48:
-            write = services.get_characteristic(FFFF_WRITE_UUID)
-            notify = services.get_characteristic(FFFF_NOTIFY_UUID)
-            if write and notify:
-                self._write_char, self._read_char = write, notify
-                resolved = True
         table = "; ".join(
             f"{service.uuid}: "
             + ", ".join(
@@ -635,49 +630,53 @@ class ACInfinityDevice(ACInfinityController):
         )
         return resolved
 
-    async def _ensure_connected(self) -> None:
-        await super()._ensure_connected()
-        client = self._client
-        if not self._is_type_48 or client is None or client is self._extra_notify_client:
-            return
-        # Listen on the other notify characteristic too, in case replies come back there.
-        self._extra_notify_client = client
-        if char := client.services.get_characteristic(D5_NOTIFY_UUID):
-            try:
-                await client.start_notify(char, self._notification_handler)
-            except BLEAK_EXCEPTIONS as err:
-                _LOGGER.debug("%s: Subscribing to %s failed: %r", self.name, D5_NOTIFY_UUID, err)
-
-    async def _execute_command_locked(self, command: bytes) -> bytes:
-        """Type 48 only takes acknowledged writes. Everything else is unchanged."""
-        if not self._is_type_48:
-            return await super()._execute_command_locked(command)
-        assert self._client is not None  # nosec
-        if not self._read_char or not self._write_char:
-            raise CharacteristicMissingError("Read or write characteristic missing")
-        return await self._write_and_wait(self._write_char, command)
-
-    async def _write_and_wait(self, char, command: bytes) -> bytes:
-        """Acknowledged write, then wait for the A5 reply."""
+    async def _write_and_wait(self, char, command: bytes, response: bool) -> bytes:
+        """Write a command, then wait for the A5 reply."""
         self._notify_future = asyncio.get_running_loop().create_future()
         try:
-            await self._client.write_gatt_char(char, command, True)
+            await self._client.write_gatt_char(char, command, response)
             async with asyncio.timeout(COMMAND_TIMEOUT):
                 return await self._notify_future
         finally:
             self._notify_future = None
 
-    async def _probe_d5_write(self, command: bytes) -> None:
-        """Type 48 setup only: try the query on 70D51001 too, and log what happens."""
-        try:
-            await self._ensure_connected()
-            char = self._client.services.get_characteristic(D5_WRITE_UUID)
-            if char is None:
-                return
-            reply = await self._write_and_wait(char, command)
-            _LOGGER.warning("%s: 70d51001 answered: %s", self.name, reply.hex())
-        except (*BLEAK_EXCEPTIONS, AssertionError) as err:
-            _LOGGER.warning("%s: 70d51001 probe failed: %r", self.name, err)
+    @staticmethod
+    def _decode_tlv(frame: bytes) -> dict[str, str]:
+        """Split a reply's payload into key: value hex, for logging."""
+        payload = bytes(frame[10:-2])
+        values: dict[str, str] = {}
+        i = 0
+        while i + 1 < len(payload):
+            length = payload[i + 1]
+            values[hex(payload[i])] = payload[i + 2 : i + 2 + length].hex()
+            i += 2 + length
+        return values
+
+    async def _probe_type_48(self) -> None:
+        """Type 48 setup only: send the home-family query and log the reply. Read-only.
+
+        Tries the library's write without a response first, then an acknowledged write.
+        """
+        for response in (False, True):
+            command = self._protocol._add_head(TYPE_48_QUERY, 1, self.sequence)
+            how = "acknowledged" if response else "without response"
+            try:
+                await self._ensure_connected()
+                reply = await self._write_and_wait(self._write_char, command, response)
+            except (*BLEAK_EXCEPTIONS, AssertionError) as err:
+                _LOGGER.warning(
+                    "%s: type 48 query %s (%s) failed: %r", self.name, how, command.hex(), err
+                )
+                continue
+            _LOGGER.warning(
+                "%s: type 48 query %s (%s) answered: %s, values %s",
+                self.name,
+                how,
+                command.hex(),
+                bytes(reply).hex(),
+                self._decode_tlv(reply),
+            )
+            return
 
     async def _log_device_info(self) -> None:
         """Type 48 setup only: log the model and revision strings the vent reports."""
@@ -712,10 +711,11 @@ class ACInfinityDevice(ACInfinityController):
             self._log_setup_failure("connect", err)
             self._setup_notifications = None
             raise
-        command = b""
         try:
             if self._is_type_48:
                 await self._log_device_info()
+                await self._probe_type_48()
+                raise UnsupportedDevice(f"{self.name}: type 48 vents aren't supported yet")
             _LOGGER.debug("%s: Updating model data", self.name)
             command = self._protocol.get_model_data(self.state.type, 0, self.sequence)
             if data := await self._send_command(command):
@@ -737,11 +737,11 @@ class ACInfinityDevice(ACInfinityController):
             # emits that in a periodic 0x1EFF status push. Stay connected a few
             # seconds so _notification_handler can catch one.
             await asyncio.sleep(4)
+        except UnsupportedDevice:
+            raise
         except Exception as err:
             # A TimeoutError here means the write went out but no reply came back.
             self._log_setup_failure("model query", err)
-            if self._is_type_48 and command:
-                await self._probe_d5_write(command)
             raise
         finally:
             if self._setup_notifications is not None:

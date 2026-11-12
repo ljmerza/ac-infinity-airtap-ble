@@ -20,6 +20,7 @@
     },
     "error": {
       "cannot_connect": "Couldn't reach the vent. The Home Assistant log has the details.",
+      "not_supported": "This vent model isn't supported yet. The Home Assistant log has what it reported.",
       "unknown": "Unexpected error. The Home Assistant log has the details."
     },
     "abort": {

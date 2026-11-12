@@ -17,7 +17,7 @@ from homeassistant.const import CONF_ADDRESS, CONF_SERVICE_DATA
 from homeassistant.data_entry_flow import FlowResult
 
 from .const import BLEAK_EXCEPTIONS, DOMAIN
-from .device import ACInfinityDevice, DeviceInfoEx
+from .device import ACInfinityDevice, DeviceInfoEx, UnsupportedDevice
 from .legacy import async_adopt_legacy_entry, async_find_legacy_entry
 
 _LOGGER = logging.getLogger(__name__)
@@ -84,6 +84,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
             try:
                 await controller.update()
+            except UnsupportedDevice:
+                errors["base"] = "not_supported"
             except BLEAK_EXCEPTIONS:
                 errors["base"] = "cannot_connect"
             except Exception:  # pylint: disable=broad-except
