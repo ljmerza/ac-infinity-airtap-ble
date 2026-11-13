@@ -16,11 +16,21 @@
         "data": {
           "address": "MAC address"
         }
+      },
+      "cloud": {
+        "title": "Sign in to AC Infinity",
+        "description": "This is a Wi-Fi AirTap (Airtap AI), which only takes commands through the AC Infinity cloud, not Bluetooth. Sign in with the account it's added to in the AC Infinity app.",
+        "data": {
+          "email": "[%key:common::config_flow::data::email%]",
+          "password": "[%key:common::config_flow::data::password%]"
+        }
       }
     },
     "error": {
       "cannot_connect": "Couldn't reach the vent. The Home Assistant log has the details.",
-      "not_supported": "This vent model isn't supported yet. The Home Assistant log has what it reported.",
+      "cloud_unreachable": "Couldn't reach the AC Infinity cloud. The Home Assistant log has the details.",
+      "invalid_auth": "AC Infinity didn't accept that email and password.",
+      "not_in_account": "This vent isn't on that AC Infinity account. Add it in the AC Infinity app first. The Home Assistant log lists what the account has.",
       "unknown": "Unexpected error. The Home Assistant log has the details."
     },
     "abort": {

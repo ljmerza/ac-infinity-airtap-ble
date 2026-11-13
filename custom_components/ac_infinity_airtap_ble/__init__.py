@@ -5,14 +5,21 @@ import logging
 from ac_infinity_ble import DeviceInfo
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_ADDRESS, CONF_SERVICE_DATA, Platform
+from homeassistant.const import (
+    CONF_ADDRESS,
+    CONF_EMAIL,
+    CONF_PASSWORD,
+    CONF_SERVICE_DATA,
+    Platform,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 
-from .const import DOMAIN
+from .cloud import AcInfinityCloud, AirtapCloudCoordinator
+from .const import CONF_CLOUD, CONF_DEV_ID, DOMAIN
 from .coordinator import ACInfinityDataUpdateCoordinator
 from .device import ACInfinityDevice, DeviceInfoEx
-from .models import ACInfinityData
+from .models import ACInfinityCloudData, ACInfinityData
 
 PLATFORMS: list[Platform] = [
     Platform.BUTTON,
@@ -23,10 +30,16 @@ PLATFORMS: list[Platform] = [
     Platform.SWITCH,
 ]
 
+# Cloud entries only get what the cloud can do for an AIRTAP: the fan and its readings.
+CLOUD_PLATFORMS: list[Platform] = [Platform.FAN, Platform.SENSOR]
+
 _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    if cloud := entry.data.get(CONF_CLOUD):
+        return await _async_setup_cloud_entry(hass, entry, cloud)
+
     address: str = entry.data[CONF_ADDRESS]
     ble_device = bluetooth.async_ble_device_from_address(hass, address.upper(), True)
     if not ble_device:
@@ -64,4 +77,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     entry.async_on_unload(coordinator.async_start())
 
+    return True
+
+
+async def _async_setup_cloud_entry(hass: HomeAssistant, entry: ConfigEntry, cloud: dict) -> bool:
+    """A type 48 vent: poll and control it through the AC Infinity cloud."""
+    client = AcInfinityCloud(hass, cloud[CONF_EMAIL], cloud[CONF_PASSWORD])
+    coordinator = AirtapCloudCoordinator(hass, entry, client, cloud[CONF_DEV_ID])
+    # Raises ConfigEntryNotReady while the cloud can't be reached.
+    await coordinator.async_config_entry_first_refresh()
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = ACInfinityCloudData(
+        entry.title, entry.data[CONF_ADDRESS], coordinator
+    )
+    await hass.config_entries.async_forward_entry_setups(entry, CLOUD_PLATFORMS)
     return True

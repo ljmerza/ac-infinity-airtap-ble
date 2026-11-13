@@ -10,12 +10,15 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import slugify
 
+from .cloud import AirtapCloudCoordinator
 from .const import DEVICE_MODEL, DOMAIN, FAMILY_E_MODELS, MANUFACTURER
 from .coordinator import ACInfinityDataUpdateCoordinator
 from .device import ACInfinityDevice
-from .models import ACInfinityData
+from .fan import cloud_device_info
+from .models import ACInfinityCloudData, ACInfinityData
 
 
 async def async_setup_entry(
@@ -23,7 +26,15 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    data: ACInfinityData = hass.data[DOMAIN][entry.entry_id]
+    data: ACInfinityData | ACInfinityCloudData = hass.data[DOMAIN][entry.entry_id]
+    if isinstance(data, ACInfinityCloudData):
+        async_add_entities(
+            [
+                CloudTemperatureSensor(data, "Temperature"),
+                CloudCurrentSpeedSensor(data, "Current Speed"),
+            ]
+        )
+        return
     entities = [
         TemperatureSensor(data.coordinator, data.device, "Temperature"),
         CurrentSpeedSensor(data.coordinator, data.device, "Current Speed"),
@@ -116,3 +127,39 @@ class VpdSensor(ACInfinitySensor):
     def _update_attrs(self) -> None:
         """Handle updating _attr values."""
         self._attr_native_value = self._device.vpd
+
+
+class CloudSensor(CoordinatorEntity[AirtapCloudCoordinator], SensorEntity):
+    """A reading from a type 48 vent's entry in the AC Infinity cloud."""
+
+    _attr_has_entity_name = True
+
+    def __init__(self, data: ACInfinityCloudData, name: str) -> None:
+        super().__init__(data.coordinator)
+        self._attr_unique_id = f"{data.address}_{slugify(name)}"
+        self._attr_device_info = cloud_device_info(data)
+
+
+class CloudTemperatureSensor(CloudSensor):
+    """deviceInfo.temperature, in hundredths of a degree C."""
+
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def native_value(self) -> float | None:
+        value = self.coordinator.info.get("temperature")
+        return value / 100 if isinstance(value, (int, float)) else None
+
+
+class CloudCurrentSpeedSensor(CloudSensor):
+    """The speed the vent is running at (deviceInfo.speak), in any mode."""
+
+    _attr_name = "Current Speed"
+    _attr_icon = "mdi:fan"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def native_value(self) -> int | None:
+        return self.coordinator.info.get("speak")
