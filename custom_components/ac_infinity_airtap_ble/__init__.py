@@ -30,8 +30,16 @@ PLATFORMS: list[Platform] = [
     Platform.SWITCH,
 ]
 
-# Cloud entries only get what the cloud can do for an AIRTAP: the fan and its readings.
-CLOUD_PLATFORMS: list[Platform] = [Platform.FAN, Platform.SENSOR]
+# Cloud entries get what the cloud can do for an AIRTAP. Each platform only creates the
+# entities whose fields the cloud reports for the vent.
+CLOUD_PLATFORMS: list[Platform] = [
+    Platform.BINARY_SENSOR,
+    Platform.FAN,
+    Platform.NUMBER,
+    Platform.SELECT,
+    Platform.SENSOR,
+    Platform.SWITCH,
+]
 
 _LOGGER = logging.getLogger(__name__)
 

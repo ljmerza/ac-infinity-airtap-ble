@@ -10,13 +10,22 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import slugify
 
+from .cloud import (
+    ID_MODE,
+    ID_VENT_BEHAVIOR,
+    IDS_SETTINGS,
+    MODE_NAMES,
+)
+from .cloud_entity import CloudEntity
 from .const import DEVICE_MODEL, DOMAIN, MANUFACTURER
 from .coordinator import (ACInfinityDataUpdateCoordinator,
                           ActiveBluetoothCoordinatorEntity)
-from .device import BRIGHTNESS_LEVEL_TO_BYTE, ACInfinityDevice
-from .models import ACInfinityData
+from .device import BRIGHTNESS_BYTE_TO_LEVEL, BRIGHTNESS_LEVEL_TO_BYTE, ACInfinityDevice
+from .models import ACInfinityCloudData, ACInfinityData
 
 BRIGHTNESS_OPTIONS = [str(lvl) for lvl in sorted(BRIGHTNESS_LEVEL_TO_BYTE)]  # "1".."5"
+VENT_BEHAVIOR = {0: "Auto", 1: "Open"}  # co2Accuracy: Auto closes the vent while idle
+UNITS = {0: UnitOfTemperature.FAHRENHEIT, 1: UnitOfTemperature.CELSIUS}  # devCompany
 
 
 async def async_setup_entry(
@@ -24,7 +33,44 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    data: ACInfinityData = hass.data[DOMAIN][entry.entry_id]
+    data: ACInfinityData | ACInfinityCloudData = hass.data[DOMAIN][entry.entry_id]
+    if isinstance(data, ACInfinityCloudData):
+        coordinator = data.coordinator
+        entities = [
+            CloudSelect(
+                data, "Mode", list(MODE_NAMES.values()),
+                lambda c: MODE_NAMES.get(c.info.get("curMode")),
+                lambda c, o: c.set_control(ID_MODE, atType=_key(MODE_NAMES, o)),
+            )
+        ]
+        if coordinator.mode_value("co2Accuracy") is not None:
+            entities.append(
+                CloudSelect(
+                    data, "Vent Behavior", list(VENT_BEHAVIOR.values()),
+                    lambda c: VENT_BEHAVIOR.get(c.mode_value("co2Accuracy")),
+                    lambda c, o: c.set_control(ID_VENT_BEHAVIOR, co2Accuracy=_key(VENT_BEHAVIOR, o)),
+                )
+            )
+        if coordinator.settings.get("devLight") is not None:
+            entities.append(
+                CloudSelect(
+                    data, "Display Brightness", BRIGHTNESS_OPTIONS,
+                    lambda c: _str(BRIGHTNESS_BYTE_TO_LEVEL.get(c.settings.get("devLight"))),
+                    lambda c, o: c.set_setting(
+                        list(IDS_SETTINGS), devLight=BRIGHTNESS_LEVEL_TO_BYTE[int(o)]
+                    ),
+                )
+            )
+        if coordinator.settings.get("devCompany") is not None:
+            entities.append(
+                CloudSelect(
+                    data, "Temperature Unit", list(UNITS.values()),
+                    lambda c: UNITS.get(c.settings.get("devCompany")),
+                    lambda c, o: c.set_setting(list(IDS_SETTINGS), devCompany=_key(UNITS, o)),
+                )
+            )
+        async_add_entities(entities)
+        return
     async_add_entities(
         [
             ACInfinityDisplayBrightness(data.coordinator, data.device, "Display Brightness"),
@@ -122,3 +168,29 @@ class ACInfinityTemperatureUnit(ACInfinityDisplayBrightness):
             self._attr_current_option = (
                 UnitOfTemperature.CELSIUS if unit else UnitOfTemperature.FAHRENHEIT
             )
+
+
+def _key(mapping: dict, value) -> int:
+    return next(k for k, v in mapping.items() if v == value)
+
+
+def _str(value) -> str | None:
+    return None if value is None else str(value)
+
+
+class CloudSelect(CloudEntity, SelectEntity):
+    """A choice on a type 48 vent, read and written through the AC Infinity cloud."""
+
+    def __init__(self, data: ACInfinityCloudData, name: str, options, read, write) -> None:
+        super().__init__(data, name)
+        self._attr_name = name
+        self._attr_options = options
+        self._read = read
+        self._write = write
+
+    @property
+    def current_option(self) -> str | None:
+        return self._read(self.coordinator)
+
+    async def async_select_option(self, option: str) -> None:
+        await self._send(self._write(self.coordinator, option))

@@ -55,6 +55,12 @@ async def async_get_config_entry_diagnostics(
         "cloud_device": async_redact_data(data.coordinator.data or {}, TO_REDACT)
         if isinstance(data, ACInfinityCloudData)
         else None,
+        "cloud_mode_settings": async_redact_data(data.coordinator.mode, TO_REDACT)
+        if isinstance(data, ACInfinityCloudData)
+        else None,
+        "cloud_device_settings": async_redact_data(data.coordinator.settings, TO_REDACT)
+        if isinstance(data, ACInfinityCloudData)
+        else None,
         "scanners": {
             "connectable": bluetooth.async_scanner_count(hass, connectable=True),
             "total": bluetooth.async_scanner_count(hass, connectable=False),

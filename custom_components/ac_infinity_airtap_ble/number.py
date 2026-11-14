@@ -3,7 +3,8 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from homeassistant.components.number import (NumberEntityDescription, NumberMode,
+from homeassistant.components.number import (NumberDeviceClass, NumberEntity,
+                                             NumberEntityDescription, NumberMode,
                                              RestoreNumber)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTemperature
@@ -13,6 +14,9 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import slugify
 
+from .cloud import (ID_AI_THRESHOLD, ID_CALIBRATION, ID_COOL_TRIGGER, ID_HEAT_TRIGGER,
+                    AirtapCloudCoordinator)
+from .cloud_entity import CloudEntity
 from .const import DEVICE_MODEL, DOMAIN, MANUFACTURER
 from .coordinator import (ACInfinityDataUpdateCoordinator,
                           ActiveBluetoothCoordinatorEntity)
@@ -20,7 +24,76 @@ from .device import (AUTO_TRIGGER_RANGE_C, AUTO_TRIGGER_RANGE_F,
                      CALIBRATION_RANGE_C, CALIBRATION_RANGE_F, OFF_SPEED_RANGE,
                      TRANSITION_RANGE_C, TRANSITION_RANGE_F, ACInfinityDevice,
                      c_delta_to_f, c_to_f, f_delta_to_c, f_to_c)
-from .models import ACInfinityData
+from .models import ACInfinityCloudData, ACInfinityData
+
+
+@dataclass(frozen=True, kw_only=True)
+class CloudNumberDescription(NumberEntityDescription):
+    """A setting of a type 48 vent in the AC Infinity cloud, shown in °F.
+
+    read returns the °F value; write sends a °F value (with its °C twin) back.
+    """
+
+    read: Callable[[AirtapCloudCoordinator], float | None]
+    write: Callable[[AirtapCloudCoordinator, int], Awaitable[None]]
+
+
+def _cool_heat_c(value_f: int) -> int:
+    """The °C twin the app sends with a Cool or Heat trigger (16-31 °C)."""
+    return min(31, max(16, round(f_to_c(value_f))))
+
+
+# Ranges from the app (ControlAirTapModel, SensorVModel): triggers 60-88 °F / 16-31 °C,
+# Temp AI threshold 2-6 °F / 1-3 °C, calibration ±20 °F stored as °C with °F = 2 x °C.
+CLOUD_NUMBERS = (
+    CloudNumberDescription(
+        key="targetTempF", name="Cool Trigger", device_class=NumberDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
+        native_min_value=60, native_max_value=88, native_step=1, mode=NumberMode.BOX,
+        read=lambda c: c.mode_value("targetTempF"),
+        write=lambda c, f: c.set_control(ID_COOL_TRIGGER, targetTempF=f, targetTemp=_cool_heat_c(f)),
+    ),
+    CloudNumberDescription(
+        key="waterTempHighValueF", name="Heat Trigger", device_class=NumberDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
+        native_min_value=60, native_max_value=88, native_step=1, mode=NumberMode.BOX,
+        read=lambda c: c.mode_value("waterTempHighValueF"),
+        write=lambda c, f: c.set_control(
+            ID_HEAT_TRIGGER, waterTempHighValueF=f, waterTempHighValue=_cool_heat_c(f)
+        ),
+    ),
+    CloudNumberDescription(
+        key="devLtf", name="Temp AI Threshold", icon="mdi:thermometer-lines",
+        native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
+        native_min_value=2, native_max_value=6, native_step=1, mode=NumberMode.SLIDER,
+        read=lambda c: c.mode_value("devLtf"),
+        write=lambda c, f: c.set_control(ID_AI_THRESHOLD, devLtf=f, devLt=max(1, min(3, round(f / 2)))),
+    ),
+    CloudNumberDescription(
+        key="devCth", name="Temperature Calibration", icon="mdi:thermometer-plus",
+        native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
+        native_min_value=-20, native_max_value=20, native_step=2, mode=NumberMode.BOX,
+        read=lambda c: c.settings.get("devCth"),
+        write=lambda c, f: c.set_setting([ID_CALIBRATION], devCth=f, devCt=f // 2),
+    ),
+)
+
+
+class CloudNumber(CloudEntity, NumberEntity):
+    """A number on a type 48 vent, read and written through the AC Infinity cloud."""
+
+    entity_description: CloudNumberDescription
+
+    def __init__(self, data: ACInfinityCloudData, description: CloudNumberDescription) -> None:
+        super().__init__(data, description.name)
+        self.entity_description = description
+
+    @property
+    def native_value(self) -> float | None:
+        return self.entity_description.read(self.coordinator)
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self._send(self.entity_description.write(self.coordinator, int(value)))
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -88,7 +161,15 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    data: ACInfinityData = hass.data[DOMAIN][entry.entry_id]
+    data: ACInfinityData | ACInfinityCloudData = hass.data[DOMAIN][entry.entry_id]
+    if isinstance(data, ACInfinityCloudData):
+        # Only what the cloud reports for this vent.
+        async_add_entities(
+            CloudNumber(data, description)
+            for description in CLOUD_NUMBERS
+            if description.read(data.coordinator) is not None
+        )
+        return
     entities: list[ACInfinityNumber] = [ACInfinityOffSpeed(data.coordinator, data.device)]
     entities += [
         ACInfinityTemperatureNumber(data.coordinator, data.device, description)
