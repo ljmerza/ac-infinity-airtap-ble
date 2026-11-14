@@ -13,11 +13,17 @@ from homeassistant.components.bluetooth import (
     async_ble_device_from_address,
     async_discovered_service_info,
 )
-from homeassistant.const import CONF_ADDRESS, CONF_SERVICE_DATA
+from homeassistant.const import CONF_ADDRESS, CONF_EMAIL, CONF_PASSWORD, CONF_SERVICE_DATA
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.helpers.selector import (
+    TextSelector,
+    TextSelectorConfig,
+    TextSelectorType,
+)
 
-from .const import BLEAK_EXCEPTIONS, DOMAIN
-from .device import ACInfinityDevice, DeviceInfoEx, UnsupportedDevice
+from .cloud import AcInfinityCloud, CloudAuthError, CloudError, mac_candidates, normalize_mac
+from .const import BLEAK_EXCEPTIONS, CONF_CLOUD, CONF_DEV_ID, DOMAIN, TYPE_AIRTAP_AI
+from .device import ACInfinityDevice, DeviceInfoEx
 from .legacy import async_adopt_legacy_entry, async_find_legacy_entry
 
 _LOGGER = logging.getLogger(__name__)
@@ -35,6 +41,10 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         self._discovery_info: BluetoothServiceInfoBleak | None = None
         self._discovered_devices: dict[str, BluetoothServiceInfoBleak] = {}
+        # The type 48 vent being set up through the cloud, and whether a saved login
+        # from another vent has been tried yet.
+        self._cloud_target: BluetoothServiceInfoBleak | None = None
+        self._tried_saved_login = False
 
     async def async_step_bluetooth(
         self, discovery_info: BluetoothServiceInfoBleak
@@ -79,13 +89,19 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 data = await async_adopt_legacy_entry(self.hass, legacy)
                 return self.async_create_entry(title=legacy.title, data=data)
 
+            # Type 48 doesn't take commands over Bluetooth, only through the cloud.
+            info = parse_manufacturer_data(
+                discovery_info.advertisement.manufacturer_data[MANUFACTURER_ID]
+            )
+            if info.type == TYPE_AIRTAP_AI:
+                self._cloud_target = discovery_info
+                return await self.async_step_cloud()
+
             controller = ACInfinityDevice(
                 discovery_info.device, advertisement_data=discovery_info.advertisement
             )
             try:
                 await controller.update()
-            except UnsupportedDevice:
-                errors["base"] = "not_supported"
             except BLEAK_EXCEPTIONS:
                 errors["base"] = "cannot_connect"
             except Exception:  # pylint: disable=broad-except
@@ -148,6 +164,84 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=data_schema,
             errors=errors,
         )
+
+    def _saved_login(self) -> dict[str, str] | None:
+        """The cloud login of a vent already set up, so the next one doesn't ask again."""
+        for entry in self._async_current_entries():
+            if cloud := entry.data.get(CONF_CLOUD):
+                return {CONF_EMAIL: cloud[CONF_EMAIL], CONF_PASSWORD: cloud[CONF_PASSWORD]}
+        return None
+
+    async def _find_in_account(
+        self, email: str, password: str
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        """Log in and find the vent being set up. Returns (device, error key)."""
+        target = self._cloud_target
+        try:
+            devices = await AcInfinityCloud(self.hass, email, password).devices()
+        except CloudAuthError as err:
+            _LOGGER.warning("AC Infinity login refused: %s", err)
+            return None, "invalid_auth"
+        except CloudError as err:
+            _LOGGER.warning("Couldn't reach the AC Infinity cloud: %s", err)
+            return None, "cloud_unreachable"
+        advert = target.advertisement.manufacturer_data.get(MANUFACTURER_ID)
+        wanted = mac_candidates(target.address, advert)
+        for device in devices:
+            if normalize_mac(device.get("devMacAddr", "")) in wanted:
+                return device, None
+        _LOGGER.warning(
+            "No device on the AC Infinity account matches %s (tried %s). The account has: %s",
+            target.address,
+            sorted(wanted),
+            [(d.get("devName"), d.get("devType"), d.get("devMacAddr")) for d in devices],
+        )
+        return None, "not_in_account"
+
+    async def async_step_cloud(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Set up a type 48 vent through the AC Infinity cloud."""
+        errors: dict[str, str] = {}
+        login = user_input
+        if login is None and not self._tried_saved_login:
+            self._tried_saved_login = True
+            login = self._saved_login()
+
+        if login is not None:
+            device, error = await self._find_in_account(login[CONF_EMAIL], login[CONF_PASSWORD])
+            if device is not None:
+                target = self._cloud_target
+                info = parse_manufacturer_data(
+                    target.advertisement.manufacturer_data[MANUFACTURER_ID]
+                )
+                return self.async_create_entry(
+                    title=device.get("devName") or info.name,
+                    data={
+                        CONF_ADDRESS: target.address,
+                        CONF_SERVICE_DATA: dataclasses.asdict(info),
+                        CONF_CLOUD: {
+                            CONF_EMAIL: login[CONF_EMAIL],
+                            CONF_PASSWORD: login[CONF_PASSWORD],
+                            CONF_DEV_ID: str(device["devId"]),
+                        },
+                    },
+                )
+            # A saved login that doesn't find this vent just falls through to the form.
+            if user_input is not None:
+                errors["base"] = error
+
+        data_schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_EMAIL, default=(login or {}).get(CONF_EMAIL, "")
+                ): TextSelector(TextSelectorConfig(type=TextSelectorType.EMAIL)),
+                vol.Required(CONF_PASSWORD): TextSelector(
+                    TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                ),
+            }
+        )
+        return self.async_show_form(step_id="cloud", data_schema=data_schema, errors=errors)
 
     async def async_step_manual(
         self, user_input: dict[str, Any] | None = None

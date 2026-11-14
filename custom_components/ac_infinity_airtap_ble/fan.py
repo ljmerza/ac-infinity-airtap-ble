@@ -16,11 +16,13 @@ from homeassistant.util.percentage import (int_states_in_range,
                                            percentage_to_ranged_value,
                                            ranged_value_to_percentage)
 
+from .cloud import ID_POWER, ID_SPEED, MODE_NAMES
+from .cloud_entity import CloudEntity
 from .const import DEVICE_MODEL, DOMAIN, MANUFACTURER
 from .coordinator import (ACInfinityDataUpdateCoordinator,
                           ActiveBluetoothCoordinatorEntity)
 from .device import ACInfinityDevice
-from .models import ACInfinityData
+from .models import ACInfinityCloudData, ACInfinityData
 
 SPEED_RANGE = (1, 10)
 PRESET_AUTO = "Auto"
@@ -31,7 +33,10 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    data: ACInfinityData = hass.data[DOMAIN][entry.entry_id]
+    data: ACInfinityData | ACInfinityCloudData = hass.data[DOMAIN][entry.entry_id]
+    if isinstance(data, ACInfinityCloudData):
+        async_add_entities([AirtapCloudFan(data, "Fan")])
+        return
     async_add_entities([ACInfinityFan(data.coordinator, data.device, "Fan")])
 
 
@@ -135,3 +140,60 @@ class ACInfinityFan(
         """Handle updated data from the coordinator."""
         self._update_attrs()
         super()._handle_coordinator_update()
+
+
+class AirtapCloudFan(CloudEntity, FanEntity):
+    """A type 48 vent through the AC Infinity cloud.
+
+    On and off are the vent's power (powerState). Speed is its fan level (onSpead, 1-10),
+    which the vent uses in every mode; the mode is its own select.
+    """
+
+    _attr_name = None
+    _attr_speed_count = int_states_in_range(SPEED_RANGE)
+    _attr_supported_features = (
+        FanEntityFeature.SET_SPEED | FanEntityFeature.TURN_OFF | FanEntityFeature.TURN_ON
+    )
+
+    @property
+    def is_on(self) -> bool:
+        power = self.coordinator.info.get("powerState")
+        if power is not None:
+            return power == 1
+        return bool(self.coordinator.info.get("speak"))
+
+    @property
+    def percentage(self) -> int | None:
+        """The fan level set on the vent, or what it runs at if that isn't known."""
+        level = self.coordinator.mode_value("onSpead")
+        if level is None:
+            level = self.coordinator.info.get("speak")
+        return ranged_value_to_percentage(SPEED_RANGE, int(level)) if level else 0
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        mode = self.coordinator.info.get("curMode")
+        return {"mode": MODE_NAMES.get(mode, mode)}
+
+    async def async_set_percentage(self, percentage: int) -> None:
+        if not percentage:
+            await self.async_turn_off()
+            return
+        speed = math.ceil(percentage_to_ranged_value(SPEED_RANGE, percentage))
+        await self._send(self.coordinator.set_control(ID_SPEED, onSpead=speed))
+        if not self.is_on:
+            await self._send(self.coordinator.set_control(ID_POWER, powerState=1))
+
+    async def async_turn_on(
+        self,
+        percentage: int | None = None,
+        preset_mode: str | None = None,
+        **kwargs: Any,
+    ) -> None:
+        if percentage:
+            await self.async_set_percentage(percentage)
+            return
+        await self._send(self.coordinator.set_control(ID_POWER, powerState=1))
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._send(self.coordinator.set_control(ID_POWER, powerState=0))

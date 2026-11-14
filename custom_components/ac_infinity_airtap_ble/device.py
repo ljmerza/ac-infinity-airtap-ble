@@ -57,39 +57,7 @@ READ_BACK_KEYS = (
     [0x20, 0x21, 0x22, 0x24, 0x11, 0x12, 0x13],
 )
 
-# Type 48 is the newer Wi-Fi AirTap ("Airtap AI", AC-RBF4-B, issue #1). Its 0xFFFF
-# service (ff01/ff02) is Espressif BluFi Wi-Fi provisioning and 0x8018 is Espressif's BLE
-# OTA service. The AC Infinity app (2.1.2) sends it the same A5 frames on 70D51001 with
-# an acknowledged write, but the vent refuses ours with GATT error 14 whatever the
-# payload. Before writing, the app's connect for Wi-Fi models subscribes to ff02 and the
-# four OTA characteristics, so setup does the same. Subscribing only writes their CCCDs:
-# nothing is sent to BluFi or OTA. Until a vent answers, setup only sends the app's two
-# queries for this model and logs what comes back.
-TYPE_48 = 48
-TYPE_48_EXTRA_SUBSCRIPTIONS = (
-    "0000ff02-0000-1000-8000-00805f9b34fb",
-    "00008020-0000-1000-8000-00805f9b34fb",
-    "00008021-0000-1000-8000-00805f9b34fb",
-    "00008022-0000-1000-8000-00805f9b34fb",
-    "00008023-0000-1000-8000-00805f9b34fb",
-)
-# RoomToRoomFanResolution: initMode (getAllModelData) and getModelData for port 0.
-TYPE_48_QUERIES = {
-    "initMode": [0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17],
-    "getModelData": [0x20, 0x10, 0x11, 0x12, 0x13, 0x15, 0x18, 0x24, 0x14, 0x31, 0xFF, 0x00],
-}
-DEVICE_INFO_UUIDS = {
-    "model": "00002a24-0000-1000-8000-00805f9b34fb",
-    "hardware": "00002a27-0000-1000-8000-00805f9b34fb",
-    "software": "00002a28-0000-1000-8000-00805f9b34fb",
-}
-COMMAND_TIMEOUT = 5
-
 _LOGGER = logging.getLogger(ACInfinityController.__module__)
-
-
-class UnsupportedDevice(Exception):
-    """Raised by setup for a vent this integration can't control yet."""
 
 
 @dataclass
@@ -164,12 +132,6 @@ class ACInfinityDevice(ACInfinityController):
         self._command_lock = asyncio.Lock()
         self._commands_in_line = 0
         self._newest_command: dict[int, object] = {}
-        # Type 48: every notification seen during setup as (handle, hex).
-        self._setup_notifications: list[tuple[object, str]] | None = None
-
-    @property
-    def _is_type_48(self) -> bool:
-        return self._state.type == TYPE_48
 
     def set_ble_device_and_advertisement_data(
         self,
@@ -210,8 +172,6 @@ class ACInfinityDevice(ACInfinityController):
         """
         handle = getattr(sender, "handle", sender)
         _LOGGER.debug("%s: Notification received on handle %s: %s", self.name, handle, data.hex())
-        if self._setup_notifications is not None:
-            self._setup_notifications.append((handle, data.hex()))
         # Status pushes arrive about once a second, so only a command reply (A5) may
         # resolve the future, or a read could get a status frame back instead.
         if data[:1] == b"\xa5" and self._notify_future and not self._notify_future.done():
@@ -641,89 +601,6 @@ class ACInfinityDevice(ACInfinityController):
         )
         return resolved
 
-    async def _write_and_wait(self, char, command: bytes, response: bool) -> bytes:
-        """Write a command, then wait for the A5 reply."""
-        self._notify_future = asyncio.get_running_loop().create_future()
-        try:
-            await self._client.write_gatt_char(char, command, response)
-            async with asyncio.timeout(COMMAND_TIMEOUT):
-                return await self._notify_future
-        finally:
-            self._notify_future = None
-
-    @staticmethod
-    def _decode_tlv(frame: bytes) -> dict[str, str]:
-        """Split a reply's payload into key: value hex, for logging."""
-        payload = bytes(frame[10:-2])
-        values: dict[str, str] = {}
-        i = 0
-        while i + 1 < len(payload):
-            length = payload[i + 1]
-            values[hex(payload[i])] = payload[i + 2 : i + 2 + length].hex()
-            i += 2 + length
-        return values
-
-    async def _type_48_app_connect(self) -> None:
-        """Type 48 setup only: the extra subscriptions the app makes for Wi-Fi models."""
-        client = self._client
-        subscribed, failed = [], {}
-        for uuid in TYPE_48_EXTRA_SUBSCRIPTIONS:
-            if (char := client.services.get_characteristic(uuid)) is None:
-                failed[uuid[4:8]] = "missing"
-                continue
-            try:
-                await client.start_notify(char, self._notification_handler)
-                subscribed.append(uuid[4:8])
-            except BLEAK_EXCEPTIONS as err:
-                failed[uuid[4:8]] = repr(err)
-        _LOGGER.warning(
-            "%s: MTU %s, extra subscriptions %s, failed %s",
-            self.name,
-            getattr(client, "mtu_size", None),
-            subscribed,
-            failed,
-        )
-
-    async def _probe_type_48(self) -> None:
-        """Type 48 setup only: send the app's queries for this model and log replies.
-
-        Read-only. Acknowledged writes, as the app uses. A reconnect in between loses the
-        extra subscriptions, so they're made again.
-        """
-        for name, keys in TYPE_48_QUERIES.items():
-            command = self._protocol._add_head(keys, 1, self.sequence)
-            try:
-                client = self._client
-                await self._ensure_connected()
-                if self._client is not client:
-                    await self._type_48_app_connect()
-                reply = await self._write_and_wait(self._write_char, command, True)
-            except (*BLEAK_EXCEPTIONS, AssertionError) as err:
-                _LOGGER.warning(
-                    "%s: type 48 %s query (%s) failed: %r", self.name, name, command.hex(), err
-                )
-                continue
-            _LOGGER.warning(
-                "%s: type 48 %s query (%s) answered: %s, values %s",
-                self.name,
-                name,
-                command.hex(),
-                bytes(reply).hex(),
-                self._decode_tlv(reply),
-            )
-
-    async def _log_device_info(self) -> None:
-        """Type 48 setup only: log the model and revision strings the vent reports."""
-        values = {}
-        for label, uuid in DEVICE_INFO_UUIDS.items():
-            if char := self._client.services.get_characteristic(uuid):
-                try:
-                    raw = await self._client.read_gatt_char(char)
-                    values[label] = bytes(raw).decode(errors="replace").strip("\x00")
-                except BLEAK_EXCEPTIONS as err:
-                    values[label] = repr(err)
-        _LOGGER.warning("%s [%s]: device info %s", self.name, self.address, values)
-
     def _log_setup_failure(self, stage: str, err: Exception) -> None:
         _LOGGER.warning(
             "%s [%s] (type %s, version %s): setup failed at %s: %r",
@@ -737,20 +614,12 @@ class ACInfinityDevice(ACInfinityController):
 
     async def update(self) -> None:
         """Read the device once over GATT. Only the config flow uses this."""
-        if self._is_type_48:
-            self._setup_notifications = []
         try:
             await self._ensure_connected()
         except Exception as err:
             self._log_setup_failure("connect", err)
-            self._setup_notifications = None
             raise
         try:
-            if self._is_type_48:
-                await self._type_48_app_connect()
-                await self._log_device_info()
-                await self._probe_type_48()
-                raise UnsupportedDevice(f"{self.name}: type 48 vents aren't supported yet")
             _LOGGER.debug("%s: Updating model data", self.name)
             command = self._protocol.get_model_data(self.state.type, 0, self.sequence)
             if data := await self._send_command(command):
@@ -772,19 +641,9 @@ class ACInfinityDevice(ACInfinityController):
             # emits that in a periodic 0x1EFF status push. Stay connected a few
             # seconds so _notification_handler can catch one.
             await asyncio.sleep(4)
-        except UnsupportedDevice:
-            raise
         except Exception as err:
             # A TimeoutError here means the write went out but no reply came back.
             self._log_setup_failure("model query", err)
             raise
         finally:
-            if self._setup_notifications is not None:
-                _LOGGER.warning(
-                    "%s [%s]: notifications during setup (handle, data): %s",
-                    self.name,
-                    self.address,
-                    self._setup_notifications,
-                )
-                self._setup_notifications = None
             await self._execute_disconnect()

@@ -12,11 +12,21 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import slugify
 
+from .cloud import ID_CHILD_LOCK, IDS_SETTINGS
+from .cloud_entity import CloudEntity
 from .const import DEVICE_MODEL, DOMAIN, MANUFACTURER
 from .coordinator import (ACInfinityDataUpdateCoordinator,
                           ActiveBluetoothCoordinatorEntity)
 from .device import ACInfinityDevice
-from .models import ACInfinityData
+from .models import ACInfinityCloudData, ACInfinityData
+
+# Device settings a type 48 vent keeps in the cloud: (name, field, ids, icon).
+# The app shows Display only when the cloud reports hasBacklightSwitch.
+CLOUD_SWITCHES = (
+    ("Display", "backlightSwitch", list(IDS_SETTINGS), "mdi:monitor"),
+    ("Touch Sound", "keytoneSwitch", list(IDS_SETTINGS), "mdi:volume-high"),
+    ("Child Lock", "devCsm1", [ID_CHILD_LOCK], "mdi:lock"),
+)
 
 
 async def async_setup_entry(
@@ -24,7 +34,16 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    data: ACInfinityData = hass.data[DOMAIN][entry.entry_id]
+    data: ACInfinityData | ACInfinityCloudData = hass.data[DOMAIN][entry.entry_id]
+    if isinstance(data, ACInfinityCloudData):
+        settings = data.coordinator.settings
+        async_add_entities(
+            CloudSwitch(data, name, field, ids, icon)
+            for name, field, ids, icon in CLOUD_SWITCHES
+            if settings.get(field) is not None
+            and (field != "backlightSwitch" or settings.get("hasBacklightSwitch", 1))
+        )
+        return
     async_add_entities(
         [
             ACInfinityDisplaySwitch(data.coordinator, data.device, "Display"),
@@ -149,3 +168,27 @@ class ACInfinityAutoLowSwitch(ACInfinityDisplaySwitch):
     @callback
     def _update_attrs(self) -> None:
         self._attr_is_on = self._device.state.auto_low_on
+
+
+class CloudSwitch(CloudEntity, SwitchEntity):
+    """An on/off device setting of a type 48 vent, through the AC Infinity cloud."""
+
+    def __init__(
+        self, data: ACInfinityCloudData, name: str, field: str, ids: list[int], icon: str
+    ) -> None:
+        super().__init__(data, name)
+        self._attr_name = name
+        self._attr_icon = icon
+        self._field = field
+        self._ids = ids
+
+    @property
+    def is_on(self) -> bool | None:
+        value = self.coordinator.settings.get(self._field)
+        return None if value is None else bool(value)
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._send(self.coordinator.set_setting(self._ids, **{self._field: 1}))
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._send(self.coordinator.set_setting(self._ids, **{self._field: 0}))

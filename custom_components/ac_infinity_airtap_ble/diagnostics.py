@@ -6,12 +6,20 @@ import dataclasses
 from typing import Any
 
 from homeassistant.components import bluetooth
+from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_ADDRESS, CONF_SERVICE_DATA
+from homeassistant.const import CONF_ADDRESS, CONF_EMAIL, CONF_PASSWORD, CONF_SERVICE_DATA
 from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
-from .models import ACInfinityData
+from .models import ACInfinityCloudData, ACInfinityData
+
+# The cloud login, anything in a cloud reply that could identify the account, and the
+# vent's Matter pairing code (getDevSetting returns it), which would let anyone pair it.
+TO_REDACT = {
+    CONF_EMAIL, CONF_PASSWORD, "appEmail", "appId", "userId", "token", "email",
+    "matterCode", "qrPayLoad",
+}
 
 
 def _as_dict(value: Any) -> Any:
@@ -39,10 +47,24 @@ async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> dict[str, Any]:
     address = entry.data[CONF_ADDRESS].upper()
-    data: ACInfinityData | None = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    data: ACInfinityData | ACInfinityCloudData | None = hass.data.get(DOMAIN, {}).get(
+        entry.entry_id
+    )
     return {
-        "entry_data": {**entry.data, CONF_SERVICE_DATA: _as_dict(entry.data.get(CONF_SERVICE_DATA))},
-        "state": _as_dict(data.device.state) if data else None,
+        "entry_data": async_redact_data(
+            {**entry.data, CONF_SERVICE_DATA: _as_dict(entry.data.get(CONF_SERVICE_DATA))},
+            TO_REDACT,
+        ),
+        "state": _as_dict(data.device.state) if isinstance(data, ACInfinityData) else None,
+        "cloud_device": async_redact_data(data.coordinator.data or {}, TO_REDACT)
+        if isinstance(data, ACInfinityCloudData)
+        else None,
+        "cloud_mode_settings": async_redact_data(data.coordinator.mode, TO_REDACT)
+        if isinstance(data, ACInfinityCloudData)
+        else None,
+        "cloud_device_settings": async_redact_data(data.coordinator.settings, TO_REDACT)
+        if isinstance(data, ACInfinityCloudData)
+        else None,
         "scanners": {
             "connectable": bluetooth.async_scanner_count(hass, connectable=True),
             "total": bluetooth.async_scanner_count(hass, connectable=False),
