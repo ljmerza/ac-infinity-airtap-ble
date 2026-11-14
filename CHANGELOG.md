@@ -1,5 +1,28 @@
 # Changelog
 
+## 2.3.0
+
+- Add Wi-Fi AirTaps (Airtap AI, device type 48, like the AC-RBF4-B). They don't take
+  commands over Bluetooth, the AC Infinity app only uses Bluetooth to put them on Wi-Fi,
+  so setup asks for your AC Infinity login and controls them through the AC Infinity
+  cloud. A second one reuses the login.
+- Wi-Fi AirTaps get power and speed, Mode (Fan, Cool, Heat, Temp AI, Advanced), Vent
+  Behavior, Cool and Heat triggers, the Temp AI threshold, temperature calibration,
+  display on/off and brightness, temperature unit, touch sound and child lock, with
+  temperature, current speed, AI status and vent open sensors. Writes go through the
+  cloud the same way the app sends them, and a change shows right away even though the
+  cloud takes about 20 seconds to catch up.
+- Add a Vent Louvers cover for Wi-Fi AirTaps. The app has no close command, so closing
+  sets Vent Behavior to Auto and turns the vent's fan off, which keeps the louvers shut
+  whatever the house HVAC is doing. Opening sets it to Open.
+- Setup logs why it can't reach a vent: which step failed, the vent's GATT services when
+  it's missing the ones we use, and when no adapter or proxy can reach a MAC typed in.
+  Setup steps and errors get their own text.
+- Add a diagnostics download, and the debug logging button now covers the
+  `ac_infinity_ble` library too. Diagnostics leave out the login and the vent's Matter
+  pairing code.
+- Bluetooth AirTaps work the same as before.
+
 ## 2.2.0
 
 - Add Auto mode: an Auto preset on the fan, high and low temperature triggers with
