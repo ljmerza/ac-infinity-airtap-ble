@@ -46,6 +46,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             f"Unexpected config entry service data type: {type(service_data)}"
         )
 
+    _LOGGER.debug(
+        "Setting up %s [%s] (type %s, version %s)",
+        entry.title,
+        address,
+        device_info.type,
+        device_info.version,
+    )
     device = ACInfinityDevice(ble_device, device_info)
     coordinator = ACInfinityDataUpdateCoordinator(hass, _LOGGER, ble_device, device)
 

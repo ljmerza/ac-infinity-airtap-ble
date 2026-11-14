@@ -3,9 +3,28 @@
     "step": {
       "confirm": {
         "description": "[%key:common::config_flow::description::confirm_setup%]"
+      },
+      "user": {
+        "title": "Choose a vent",
+        "data": {
+          "address": "Vent"
+        }
+      },
+      "manual": {
+        "title": "Enter the vent's MAC address",
+        "description": "No AirTap is advertising right now, so enter its Bluetooth MAC address.",
+        "data": {
+          "address": "MAC address"
+        }
       }
     },
+    "error": {
+      "cannot_connect": "Couldn't reach the vent. The Home Assistant log has the details.",
+      "not_supported": "This vent model isn't supported yet. The Home Assistant log has what it reported.",
+      "unknown": "Unexpected error. The Home Assistant log has the details."
+    },
     "abort": {
+      "already_configured": "This vent is already set up.",
       "single_instance_allowed": "[%key:common::config_flow::abort::single_instance_allowed%]",
       "no_devices_found": "[%key:common::config_flow::abort::no_devices_found%]"
     }

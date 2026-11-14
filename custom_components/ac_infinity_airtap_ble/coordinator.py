@@ -94,6 +94,13 @@ class ACInfinityDataUpdateCoordinator(PassiveBluetoothDataUpdateCoordinator):
         first_overall = not self._last_adverts
         self._last_adverts[source] = data
         if previous == data or (previous is None and not first_overall):
+            self.logger.debug(
+                "%s: ignoring %s advertisement from %s: %s",
+                self.ble_device.address,
+                "repeated" if previous == data else "proxy's first",
+                source,
+                data.hex(),
+            )
             return
         self.controller.set_ble_device_and_advertisement_data(
             service_info.device, service_info.advertisement, use_speed=previous is not None
