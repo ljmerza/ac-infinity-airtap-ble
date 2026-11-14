@@ -14,8 +14,12 @@ from homeassistant.core import HomeAssistant
 from .const import DOMAIN
 from .models import ACInfinityCloudData, ACInfinityData
 
-# The cloud login, and anything in a cloud reply that could identify the account.
-TO_REDACT = {CONF_EMAIL, CONF_PASSWORD, "appEmail", "appId", "userId", "token", "email"}
+# The cloud login, anything in a cloud reply that could identify the account, and the
+# vent's Matter pairing code (getDevSetting returns it), which would let anyone pair it.
+TO_REDACT = {
+    CONF_EMAIL, CONF_PASSWORD, "appEmail", "appId", "userId", "token", "email",
+    "matterCode", "qrPayLoad",
+}
 
 
 def _as_dict(value: Any) -> Any:

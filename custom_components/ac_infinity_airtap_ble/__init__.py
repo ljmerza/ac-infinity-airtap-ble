@@ -34,6 +34,7 @@ PLATFORMS: list[Platform] = [
 # entities whose fields the cloud reports for the vent.
 CLOUD_PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
+    Platform.COVER,
     Platform.FAN,
     Platform.NUMBER,
     Platform.SELECT,
