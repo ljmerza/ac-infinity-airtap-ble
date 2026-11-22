@@ -10,6 +10,7 @@
             "cloud_unreachable": "Couldn't reach the AC Infinity cloud. The Home Assistant log has the details.",
             "invalid_auth": "AC Infinity didn't accept that email and password.",
             "not_in_account": "This vent isn't on that AC Infinity account. Add it in the AC Infinity app first. The Home Assistant log lists what the account has.",
+            "no_airtaps": "That AC Infinity account has no Wi-Fi AirTaps left to add. Add the vent in the AC Infinity app first. The Home Assistant log lists what the account has.",
             "unknown": "Unexpected error. The Home Assistant log has the details."
         },
         "step": {
@@ -27,6 +28,28 @@
                 "description": "No AirTap is advertising right now, so enter its Bluetooth MAC address.",
                 "data": {
                     "address": "MAC address"
+                }
+            },
+            "no_devices": {
+                "title": "No AirTap found nearby",
+                "description": "Home Assistant doesn't hear any AirTap over Bluetooth right now. Wi-Fi AirTaps (Airtap AI) don't need Bluetooth, they can be added from your AC Infinity account.",
+                "menu_options": {
+                    "cloud_account": "Sign in to AC Infinity (Wi-Fi AirTaps)",
+                    "manual": "Enter a Bluetooth MAC address (Bluetooth AirTaps)"
+                }
+            },
+            "cloud_account": {
+                "title": "Sign in to AC Infinity",
+                "description": "Sign in with the account your Wi-Fi AirTap is added to in the AC Infinity app.",
+                "data": {
+                    "email": "Email",
+                    "password": "Password"
+                }
+            },
+            "cloud_pick": {
+                "title": "Choose a vent",
+                "data": {
+                    "dev_id": "Vent"
                 }
             },
             "cloud": {
