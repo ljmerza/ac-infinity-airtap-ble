@@ -154,9 +154,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "offering a MAC address or the AC Infinity account instead",
                 MANUFACTURER_ID,
             )
-            return self.async_show_menu(
-                step_id="no_devices", menu_options=["cloud_account", "manual"]
-            )
+            return await self.async_step_no_devices()
 
         _LOGGER.debug("Discovered devices: %s", self._discovered_devices)
 
@@ -255,6 +253,17 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             }
         )
         return self.async_show_form(step_id="cloud", data_schema=data_schema, errors=errors)
+
+    async def async_step_no_devices(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Nothing heard over Bluetooth: sign in to AC Infinity, or enter a MAC address.
+
+        Home Assistant only shows a step that has an async_step_ method of the same name.
+        """
+        return self.async_show_menu(
+            step_id="no_devices", menu_options=["cloud_account", "manual"]
+        )
 
     async def async_step_cloud_account(
         self, user_input: dict[str, Any] | None = None

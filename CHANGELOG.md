@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.3.2
+
+- Fix setup failing with "Config flow could not be loaded: Handler ConfigFlow doesn't
+  support step no_devices" when no AirTap is found over Bluetooth. The choice between
+  signing in to AC Infinity and entering a MAC address added in 2.3.1 was missing the
+  step Home Assistant needs to show it.
+
 ## 2.3.1
 
 - Wi-Fi AirTaps can be added without Home Assistant hearing them over Bluetooth. Setup
