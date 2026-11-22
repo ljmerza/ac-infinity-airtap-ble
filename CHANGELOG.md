@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.3.1
+
+- Wi-Fi AirTaps can be added without Home Assistant hearing them over Bluetooth. Setup
+  only offered the AC Infinity sign in after discovering the vent, so with nothing
+  discovered it went straight to the MAC address box. It now offers a choice between
+  signing in to AC Infinity, which lists the Wi-Fi AirTaps on the account, and entering a
+  Bluetooth MAC address.
+
 ## 2.3.0
 
 - Add Wi-Fi AirTaps (Airtap AI, device type 48, like the AC-RBF4-B). They don't take

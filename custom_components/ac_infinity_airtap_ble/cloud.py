@@ -94,6 +94,16 @@ def mac_candidates(ble_address: str, advert_mac: bytes | None) -> set[str]:
     return candidates
 
 
+def ble_address_from_cloud_mac(mac: str) -> str:
+    """The vent's Bluetooth address from the MAC the cloud lists (that MAC + 2).
+
+    Held on both AC-RBF4-B vents seen so far, as mac_candidates assumes.
+    """
+    value = (int(normalize_mac(mac), 16) + 2) % (1 << 48)
+    raw = f"{value:012X}"
+    return ":".join(raw[i : i + 2] for i in range(0, 12, 2))
+
+
 def record_params(record: dict[str, Any], skip_clamp: str | None = None) -> dict[str, str]:
     """A record as query parameters, the way the app sends one.
 

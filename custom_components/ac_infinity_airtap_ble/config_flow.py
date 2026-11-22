@@ -21,7 +21,14 @@ from homeassistant.helpers.selector import (
     TextSelectorType,
 )
 
-from .cloud import AcInfinityCloud, CloudAuthError, CloudError, mac_candidates, normalize_mac
+from .cloud import (
+    AcInfinityCloud,
+    CloudAuthError,
+    CloudError,
+    ble_address_from_cloud_mac,
+    mac_candidates,
+    normalize_mac,
+)
 from .const import BLEAK_EXCEPTIONS, CONF_CLOUD, CONF_DEV_ID, DOMAIN, TYPE_AIRTAP_AI
 from .device import ACInfinityDevice, DeviceInfoEx
 from .legacy import async_adopt_legacy_entry, async_find_legacy_entry
@@ -45,6 +52,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # from another vent has been tried yet.
         self._cloud_target: BluetoothServiceInfoBleak | None = None
         self._tried_saved_login = False
+        # Adding from the account without Bluetooth: the login, and the AirTaps to pick from.
+        self._cloud_login: dict[str, str] = {}
+        self._cloud_choices: dict[str, dict[str, Any]] = {}
 
     async def async_step_bluetooth(
         self, discovery_info: BluetoothServiceInfoBleak
@@ -135,15 +145,18 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     continue
                 self._discovered_devices[discovery.address] = discovery
 
-        # No AC Infinity (manufacturer 2306) devices advertising — fall back to
-        # entering a BLE MAC address manually and connecting to it directly.
+        # No AC Infinity (manufacturer 2306) devices advertising. Offer the two ways that
+        # don't need one: a Bluetooth MAC address, or the AC Infinity account, which is
+        # all a Wi-Fi AirTap needs.
         if not self._discovered_devices:
             _LOGGER.warning(
                 "No unconfigured AC Infinity advertisements (manufacturer %s) seen, "
-                "asking for a MAC address instead",
+                "offering a MAC address or the AC Infinity account instead",
                 MANUFACTURER_ID,
             )
-            return await self.async_step_manual()
+            return self.async_show_menu(
+                step_id="no_devices", menu_options=["cloud_account", "manual"]
+            )
 
         _LOGGER.debug("Discovered devices: %s", self._discovered_devices)
 
@@ -242,6 +255,119 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             }
         )
         return self.async_show_form(step_id="cloud", data_schema=data_schema, errors=errors)
+
+    async def async_step_cloud_account(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Add a Wi-Fi AirTap from the AC Infinity account, without Bluetooth.
+
+        For when Home Assistant doesn't hear the vent: the cloud is all it needs.
+        """
+        errors: dict[str, str] = {}
+        login = user_input
+        if login is None and not self._tried_saved_login:
+            self._tried_saved_login = True
+            login = self._saved_login()
+
+        if login is not None:
+            airtaps, error = await self._account_airtaps(login[CONF_EMAIL], login[CONF_PASSWORD])
+            if airtaps:
+                self._cloud_login = login
+                self._cloud_choices = airtaps
+                if len(airtaps) == 1:
+                    return await self._create_account_entry(next(iter(airtaps.values())))
+                return await self.async_step_cloud_pick()
+            # A saved login that finds nothing just falls through to the form.
+            if user_input is not None:
+                errors["base"] = error
+
+        data_schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_EMAIL, default=(login or {}).get(CONF_EMAIL, "")
+                ): TextSelector(TextSelectorConfig(type=TextSelectorType.EMAIL)),
+                vol.Required(CONF_PASSWORD): TextSelector(
+                    TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                ),
+            }
+        )
+        return self.async_show_form(
+            step_id="cloud_account", data_schema=data_schema, errors=errors
+        )
+
+    async def async_step_cloud_pick(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Pick which Wi-Fi AirTap on the account to add."""
+        if user_input is not None:
+            return await self._create_account_entry(self._cloud_choices[user_input[CONF_DEV_ID]])
+        options = {
+            dev_id: f"{device.get('devName') or device.get('devCode')} ({device.get('devMacAddr')})"
+            for dev_id, device in self._cloud_choices.items()
+        }
+        return self.async_show_form(
+            step_id="cloud_pick",
+            data_schema=vol.Schema({vol.Required(CONF_DEV_ID): vol.In(options)}),
+        )
+
+    async def _account_airtaps(
+        self, email: str, password: str
+    ) -> tuple[dict[str, dict[str, Any]], str | None]:
+        """Log in and list the account's Wi-Fi AirTaps that aren't set up yet.
+
+        Returns ({devId: device}, error key).
+        """
+        try:
+            devices = await AcInfinityCloud(self.hass, email, password).devices()
+        except CloudAuthError as err:
+            _LOGGER.warning("AC Infinity login refused: %s", err)
+            return {}, "invalid_auth"
+        except CloudError as err:
+            _LOGGER.warning("Couldn't reach the AC Infinity cloud: %s", err)
+            return {}, "cloud_unreachable"
+        configured = self._async_current_ids()
+        airtaps = {
+            str(device["devId"]): device
+            for device in devices
+            if (device.get("airTap") or device.get("devType") == TYPE_AIRTAP_AI)
+            and device.get("devMacAddr")
+            and ble_address_from_cloud_mac(device["devMacAddr"]) not in configured
+        }
+        if not airtaps:
+            _LOGGER.warning(
+                "No Wi-Fi AirTaps left to add on the AC Infinity account. The account has: %s",
+                [(d.get("devName"), d.get("devType"), d.get("devMacAddr")) for d in devices],
+            )
+            return {}, "no_airtaps"
+        return airtaps, None
+
+    async def _create_account_entry(self, device: dict[str, Any]) -> FlowResult:
+        """Create the entry for a Wi-Fi AirTap picked from the account.
+
+        Keyed by its Bluetooth address (the account's MAC + 2), like an entry set up from
+        Bluetooth discovery, so a later discovery of the same vent is already configured.
+        """
+        address = ble_address_from_cloud_mac(device["devMacAddr"])
+        await self.async_set_unique_id(address, raise_on_progress=False)
+        self._abort_if_unique_id_configured()
+        info = DeviceInfoEx(
+            type=TYPE_AIRTAP_AI,
+            name=f"A-{device.get('devCode') or address}",
+            version=device.get("devVersion") or 0,
+        )
+        login = self._cloud_login
+        return self.async_create_entry(
+            title=device.get("devName") or info.name,
+            data={
+                CONF_ADDRESS: address,
+                CONF_SERVICE_DATA: dataclasses.asdict(info),
+                CONF_CLOUD: {
+                    CONF_EMAIL: login[CONF_EMAIL],
+                    CONF_PASSWORD: login[CONF_PASSWORD],
+                    CONF_DEV_ID: str(device["devId"]),
+                },
+            },
+        )
 
     async def async_step_manual(
         self, user_input: dict[str, Any] | None = None
